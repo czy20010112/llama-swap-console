@@ -104,3 +104,30 @@ def test_long_flags_accept_equals_form() -> None:
     assert decoded.llama_cpp is not None
     assert decoded.llama_cpp.flash_attn == "auto"
     assert CommandCodec().decode(CommandCodec().encode(decoded)) == decoded
+
+
+def test_vllm_serve_positional_model_path_round_trips() -> None:
+    command = (
+        "/home/czy098/.venvs/vllm/bin/vllm serve "
+        "/mnt/d/AI/models/Qwen3.6-27B-NVFP4 "
+        "--served-model-name ${MODEL_ID} --host 127.0.0.1 --port ${PORT} "
+        "--quantization modelopt --max-model-len 65536 "
+        "--speculative-config '{\"method\":\"mtp\",\"num_speculative_tokens\":3}'"
+    )
+
+    decoded = CommandCodec().decode(command)
+
+    assert decoded.backend == "vllm"
+    assert decoded.launch_tokens == (
+        "/home/czy098/.venvs/vllm/bin/vllm",
+        "serve",
+    )
+    assert decoded.model_argument == "positional"
+    assert decoded.model_path == "/mnt/d/AI/models/Qwen3.6-27B-NVFP4"
+    assert decoded.unknown_tokens == (
+        "--served-model-name",
+        "${MODEL_ID}",
+        "--host",
+        "127.0.0.1",
+    )
+    assert CommandCodec().decode(CommandCodec().encode(decoded)) == decoded

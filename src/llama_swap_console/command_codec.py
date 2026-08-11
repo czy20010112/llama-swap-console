@@ -89,12 +89,26 @@ class CommandCodec:
         backend = self._detect_backend(tokens)
         backend_flags = VLLM_FLAGS if backend == "vllm" else LLAMA_FLAGS
         all_flags = {**COMMON_FLAGS, **backend_flags}
-        first_flag = self._first_known_flag(tokens, all_flags)
-        if first_flag is None:
-            raise CommandDecodeError("Command has no recognized model flag")
-
-        launch_tokens = tuple(tokens[:first_flag])
-        common: dict[str, Any] = {"context_length": 4096, "port_token": "${PORT}"}
+        positional_index = self._vllm_positional_model(tokens) if backend == "vllm" else None
+        if positional_index is not None:
+            launch_tokens = tuple(tokens[:positional_index])
+            first_flag = positional_index + 1
+            common: dict[str, Any] = {
+                "model_path": tokens[positional_index],
+                "model_argument": "positional",
+                "context_length": 4096,
+                "port_token": "${PORT}",
+            }
+        else:
+            first_flag = self._first_known_flag(tokens, all_flags)
+            if first_flag is None:
+                raise CommandDecodeError("Command has no recognized model flag")
+            launch_tokens = tuple(tokens[:first_flag])
+            common = {
+                "model_argument": "flag",
+                "context_length": 4096,
+                "port_token": "${PORT}",
+            }
         specific: dict[str, Any] = {}
         unknown: list[str] = []
         index = first_flag
@@ -170,7 +184,11 @@ class CommandCodec:
         else:
             assert settings.vllm is not None
             values = settings.vllm
-            tokens.extend(["--model", settings.model_path, "--port", settings.port_token])
+            if settings.model_argument == "positional":
+                tokens.append(settings.model_path)
+            else:
+                tokens.extend(["--model", settings.model_path])
+            tokens.extend(["--port", settings.port_token])
             self._append(tokens, "--max-model-len", settings.context_length)
             for flag, field in (
                 ("--gpu-memory-utilization", "gpu_memory_utilization"),
@@ -210,6 +228,13 @@ class CommandCodec:
         for index, token in enumerate(tokens):
             if CommandCodec._split_flag(token)[0] in flags:
                 return index
+        return None
+
+    @staticmethod
+    def _vllm_positional_model(tokens: list[str]) -> int | None:
+        for index, token in enumerate(tokens[:-1]):
+            if token == "serve" and not tokens[index + 1].startswith("-"):
+                return index + 1
         return None
 
     @staticmethod

@@ -55,6 +55,7 @@ class ModelSettings(BaseModel):
     backend: Backend
     launch_tokens: tuple[str, ...]
     model_path: str
+    model_argument: Literal["flag", "positional"] = "flag"
     context_length: int = Field(default=4096, ge=512, le=262144)
     port_token: str = "${PORT}"
     llama_cpp: LlamaCppSettings | None = None
