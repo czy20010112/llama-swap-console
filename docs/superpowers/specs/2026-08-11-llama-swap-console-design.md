@@ -425,3 +425,32 @@ POST   /api/config/rollback-latest
 - systemd user service 开机随 WSL 用户服务启动。
 - 前端、API、测试、安装脚本和卸载说明包含在同一项目中。
 
+## 16. 现有开源项目评估
+
+在实现前检索并源码验证了三个最接近的 MIT 项目，结论是保留独立 `9293` 管理台方案，不直接采用或 fork 它们。
+
+### 16.1 llama-dash
+
+- 仓库：`ndom91/llama-dash`，检查提交 `1f6fac26fb1a338fc259d153fca49824a8d7db11`。
+- 已实现 llama-swap 模型状态、加载/卸载、日志、整卡 GPU 指标和配置原子保存。
+- 定位是新的统一 API 网关，额外引入代理、认证、SQLite、API Key、路由策略和请求审计，超出本项目范围。
+- 配置界面是英文原始 YAML 编辑器，不是中英文结构化模型表单。
+- NVIDIA 监控只调用 `nvidia-smi --query-gpu`，没有 Windows WDDM 逐进程专用显存、服务名或 `taskkill` 命令复制。
+- Windows 本地验证可完成生产构建；测试结果为 142/143 通过，失败项是路径断言硬编码 POSIX 分隔符。
+
+### 16.2 ClaraCore
+
+- 仓库：`claraverse-space/ClaraCore`，检查提交 `dda6a777780c4bfce3d105bcbf7765b082b05980`。
+- 它是带自动设置功能的 llama-swap 分支/替代进程，不是可连接现有 `9292` 的轻量旁路管理台。
+- 自动扫描和生成配置面向 GGUF 与 llama.cpp；源码检索没有可用的 vLLM、NVFP4 或 MTP 启动配置支持。
+- 采用它会替换当前已验证的 llama-swap 版本，并增加现有 vLLM 模型兼容风险。
+
+### 16.3 llama-swap-sync
+
+- 仓库：`pkeffect/llama-swap-sync`。
+- 提供递归 GGUF 扫描、配置模板生成、备份和原子保存，可作为扫描实现的参考。
+- 不支持 Hugging Face safetensors/vLLM 模型，也没有 Web 管理、模型运行状态、日志或 GPU 进程界面。
+
+### 16.4 采用决定
+
+不安装以上项目到正式环境，也不让它们修改当前 `config.yaml`。实现时可借鉴其公开的原子保存、冲突检测和 GPU 轮询思路，但继续采用本设计的独立 FastAPI 服务、结构化编辑、双后端模型扫描和 Windows WDDM 进程采集。
