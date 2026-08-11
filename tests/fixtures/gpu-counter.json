@@ -1,0 +1,18 @@
+{
+  "counters": [
+    {"instance": "pid_2296_luid_0x00000000_0x0000_phys_0", "value": 10737418240},
+    {"instance": "pid_2296_luid_0x00000000_0x0000_phys_1", "value": 1073741824},
+    {"instance": "pid_9056_luid_0x00000000_0x0000_phys_0", "value": 4294967296},
+    {"instance": "pid_51652_luid_0x00000000_0x0000_phys_0", "value": 0},
+    {"instance": "invalid_instance", "value": 999}
+  ],
+  "processes": [
+    {"pid": 2296, "name": "python", "path": "C:\\Python\\python.exe"},
+    {"pid": 9056, "name": "dwm", "path": "C:\\Windows\\System32\\dwm.exe"}
+  ],
+  "services": [
+    {"pid": 2296, "name": "vllm-service"},
+    {"pid": 2296, "name": "model-worker"},
+    {"pid": 7777, "name": "unrelated"}
+  ]
+}
