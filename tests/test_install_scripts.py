@@ -29,6 +29,9 @@ def test_installer_is_idempotent_and_checks_health() -> None:
 
     assert "python3 -m venv" in script
     assert "pip install" in script
+    assert "command -v uv" in script
+    assert "uv pip install" in script
+    assert "--upgrade pip" not in script
     assert "systemctl --user daemon-reload" in script
     assert "systemctl --user enable --now llama-swap-console.service" in script
     assert "systemctl --user restart llama-swap-console.service" in script

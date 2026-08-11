@@ -38,3 +38,15 @@ journalctl --user -u llama-swap-console.service -f
 - 日志显示 RTX 5090 使用 `MarlinNvFp4LinearKernel`，且没有原生 FP4 支持；NVFP4 不保证更快。
 - 关闭 thinking 后实测约 `17.5 tok/s`。Cherry Studio 请求必须传入
   `chat_template_kwargs.enable_thinking=false`。
+
+## GPU 进程统计
+
+- 顶部 NVIDIA 显存来自 `nvidia-smi`，代表 RTX 显卡的实际总占用。
+- 进程列表来自 Windows WDDM，展示每个进程的图形资源分配量；共享表面可能被多个进程重复计入，因此不可求和，也不应与顶部物理显存直接比较。
+- 管理台默认选择检测到的 NVIDIA 独显，也可切换为全部图形适配器。
+
+## 新模型默认值
+
+候选模型根据权重文件大小使用保守上下文：小于 12GiB 为 64K、12-20GiB 为 32K、20-24GiB 为 16K、24GiB 及以上为 8K。vLLM 候选默认使用 FP8 KV、单序列、最多 4096 批处理 Token，并关闭 MTP；确认显存余量后再手动提高。
+
+空白的 `mmproj`、草稿模型和推测类型不会写入 llama.cpp 命令。此前 Q4 模型的 `--spec-type ''` 启动错误已修复；该模型以 64K 上下文实测进入 ready，显存约 21.9GiB。

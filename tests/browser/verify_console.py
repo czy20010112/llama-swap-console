@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from playwright.sync_api import Route, expect, sync_playwright
 
 
-BASE_URL = "http://127.0.0.1:9393"
+BASE_URL = os.environ.get("LLAMA_SWAP_CONSOLE_TEST_URL", "http://127.0.0.1:9393")
 SCREENSHOTS = Path("test-results/screenshots")
 
 
@@ -101,6 +102,21 @@ DISCOVERED = [
         "quantization_version": None,
     },
     {
+        "candidate_id": "gguf-candidate",
+        "path": "/mnt/d/AI/models/Qwen-27B-Q4_K_M.gguf",
+        "kind": "gguf",
+        "backend": "llama_cpp",
+        "size_bytes": 17_000_000_000,
+        "complete": True,
+        "reason": None,
+        "quantization": None,
+        "has_mtp": False,
+        "metadata_readable": True,
+        "architecture": "qwen35",
+        "gguf_file_type": 15,
+        "quantization_version": 2,
+    },
+    {
         "candidate_id": "partial-candidate",
         "path": "/mnt/d/AI/models/Downloading-Qwen",
         "kind": "huggingface",
@@ -128,9 +144,28 @@ GPU = {
             "temperature_c": 63,
         }
     ],
+    "adapters": [
+        {
+            "adapter_id": "0x00000000_0x0001_phys_0",
+            "name": "NVIDIA GeForce RTX 5090",
+            "is_discrete": True,
+            "dedicated_bytes": 25_300_000_000,
+            "shared_bytes": 0,
+            "memory_total_mib": 32607,
+        },
+        {
+            "adapter_id": "0x00000000_0x0002_phys_0",
+            "name": "Intel(R) UHD Graphics 770",
+            "is_discrete": False,
+            "dedicated_bytes": 600_000_000,
+            "shared_bytes": 100_000_000,
+            "memory_total_mib": None,
+        },
+    ],
     "processes": [
         {
             "pid": 2296,
+            "adapter_id": "0x00000000_0x0001_phys_0",
             "process_name": "llama-server",
             "path": "C:\\llama\\llama-server.exe",
             "service_names": ["LlamaSwap"],
@@ -141,6 +176,7 @@ GPU = {
         },
         {
             "pid": 100,
+            "adapter_id": "0x00000000_0x0002_phys_0",
             "process_name": "dwm",
             "path": "C:\\Windows\\System32\\dwm.exe",
             "service_names": [],
@@ -199,7 +235,7 @@ def main() -> None:
 
         names = page.locator("#model-list .model-row strong").all_text_contents()
         assert names == ["Fable Fusion NVFP4A16", "Muse Glimmer Q5_K_XL"], names
-        assert page.locator("#discovered-models .model-row").count() == 2
+        assert page.locator("#discovered-models .model-row").count() == 3
         assert page.locator("#discovered-models .incomplete").is_disabled()
         assert_no_horizontal_overflow(page)
 
@@ -220,10 +256,26 @@ def main() -> None:
         assert editor.get_by_text("GPU memory utilization", exact=True).count() == 1
         page.get_by_role("button", name="Cancel", exact=True).click()
 
+        assert page.locator("#gpu-selector").input_value() == "0x00000000_0x0001_phys_0"
         process_names = page.locator("#process-list .process-row strong").all_text_contents()
-        assert process_names == ["llama-server", "dwm"], process_names
+        assert process_names == ["llama-server"], process_names
         page.locator("#process-list .copy-button").first.click()
         assert page.evaluate("navigator.clipboard.readText()") == "taskkill /PID 2296 /F"
+        page.locator("#gpu-selector").select_option("all")
+        process_names = page.locator("#process-list .process-row strong").all_text_contents()
+        assert process_names == ["llama-server", "dwm"], process_names
+
+        page.get_by_text("Gemma4-31B-NVFP4", exact=True).click()
+        assert page.locator('[data-path="context_length"]').input_value() == "8192"
+        assert page.locator('[data-path="vllm.gpu_memory_utilization"]').input_value() == "0.94"
+        assert page.locator('[data-path="vllm.kv_cache_dtype"]').input_value() == "fp8"
+        assert page.locator('[data-path="vllm.max_num_batched_tokens"]').input_value() == "4096"
+        assert page.locator('[data-path="vllm.speculative.num_speculative_tokens"]').input_value() == ""
+        page.get_by_role("button", name="Cancel", exact=True).click()
+
+        page.get_by_text("Qwen-27B-Q4_K_M.gguf", exact=True).click()
+        assert page.locator('[data-path="context_length"]').input_value() == "32768"
+        page.get_by_role("button", name="Cancel", exact=True).click()
         page.wait_for_timeout(2300)
         page.screenshot(path=SCREENSHOTS / "console-1440x900.png", full_page=True)
 

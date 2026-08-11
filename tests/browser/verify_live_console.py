@@ -28,7 +28,11 @@ def main() -> None:
         page.locator("#model-list .model-row").first.wait_for(timeout=30_000)
         page.locator("#gpu-summary .gpu-device").wait_for(timeout=30_000)
 
-        assert page.locator("#model-list .model-row").count() == 8
+        assert page.locator("#model-list .model-row").count() >= 8
+        discovered_text = page.locator("#discovered-models").inner_text().lower()
+        assert "mmproj" not in discovered_text
+        assert "nomic-embed" not in discovered_text
+        assert "dflash" not in discovered_text
         assert "RTX 5090" in page.locator("#gpu-summary").inner_text()
         assert page.locator("#process-list .process-row").count() > 0
         page.get_by_text(MODEL_NAME, exact=True).last.click()

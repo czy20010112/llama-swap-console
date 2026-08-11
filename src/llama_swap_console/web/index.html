@@ -90,10 +90,11 @@
     <aside id="operations-panel" class="column operations-panel" data-panel="operations">
       <section class="ops-section gpu-section">
         <div class="ops-heading"><h2 data-i18n="gpu">GPU</h2><span id="gpu-source">NVIDIA / WDDM</span></div>
+        <select id="gpu-selector" class="gpu-selector" aria-label="选择图形适配器"></select>
         <div id="gpu-summary" class="gpu-summary"><p class="empty" data-i18n="loading">加载中</p></div>
       </section>
       <section class="ops-section process-section">
-        <div class="ops-heading"><h2 data-i18n="gpuProcesses">显存进程</h2><output id="process-count">0</output></div>
+        <div class="ops-heading"><h2 data-i18n="gpuProcesses">WDDM 显存分配</h2><output id="process-count">0</output></div>
         <label class="compact-search"><input id="process-search" type="search" data-i18n-placeholder="searchProcesses" placeholder="进程、服务或 PID"></label>
         <div id="process-list" class="process-list"></div>
       </section>

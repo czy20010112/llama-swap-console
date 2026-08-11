@@ -12,8 +12,34 @@ from typing import Any
 
 WINDOWS_GPU_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
-$counters = @((Get-Counter '\GPU Process Memory(*)\Dedicated Usage').CounterSamples | ForEach-Object {
+$gpuSamples = @((Get-Counter @(
+  '\GPU Process Memory(*)\Dedicated Usage',
+  '\GPU Adapter Memory(*)\Dedicated Usage',
+  '\GPU Adapter Memory(*)\Shared Usage'
+)).CounterSamples)
+$counters = @($gpuSamples | Where-Object {
+  $_.Path -like '*\gpu process memory(*\dedicated usage'
+} | ForEach-Object {
   [pscustomobject]@{ instance = $_.InstanceName; value = [int64]$_.CookedValue }
+})
+$adapterDedicated = @{}
+$gpuSamples | Where-Object {
+  $_.Path -like '*\gpu adapter memory(*\dedicated usage'
+} | ForEach-Object {
+  $adapterDedicated[$_.InstanceName] = [int64]$_.CookedValue
+}
+$adapterShared = @{}
+$gpuSamples | Where-Object {
+  $_.Path -like '*\gpu adapter memory(*\shared usage'
+} | ForEach-Object {
+  $adapterShared[$_.InstanceName] = [int64]$_.CookedValue
+}
+$adapters = @($adapterDedicated.Keys | Sort-Object | ForEach-Object {
+  [pscustomobject]@{
+    instance = $_
+    dedicated = $adapterDedicated[$_]
+    shared = if ($adapterShared.ContainsKey($_)) { $adapterShared[$_] } else { 0 }
+  }
 })
 $processes = @(Get-Process | ForEach-Object {
   $path = $null
@@ -23,11 +49,15 @@ $processes = @(Get-Process | ForEach-Object {
 $services = @(Get-CimInstance Win32_Service | Where-Object { $_.ProcessId -gt 0 } | ForEach-Object {
   [pscustomobject]@{ pid = [int64]$_.ProcessId; name = $_.Name }
 })
-[pscustomobject]@{ counters = $counters; processes = $processes; services = $services } |
+[pscustomobject]@{ counters = $counters; adapters = $adapters; processes = $processes; services = $services } |
   ConvertTo-Json -Compress -Depth 4
 """.strip()
 
 _PID_PATTERN = re.compile(r"(?:^|_)pid_(-?\d+)(?:_|$)", re.IGNORECASE)
+_ADAPTER_PATTERN = re.compile(
+    r"(?:^|_)luid_(0x[0-9a-f]+_0x[0-9a-f]+)_phys_(\d+)(?:_|$)",
+    re.IGNORECASE,
+)
 _PROTECTED_NAMES = {
     "system",
     "dwm",
@@ -51,6 +81,7 @@ class GpuDevice:
 @dataclass(frozen=True)
 class GpuProcess:
     pid: int
+    adapter_id: str
     dedicated_bytes: int
     dedicated_mib: float
     process_name: str | None
@@ -66,7 +97,18 @@ class GpuSnapshot:
     gpus: tuple[GpuDevice, ...]
     processes: tuple[GpuProcess, ...]
     sampled_at: float
+    adapters: tuple[GpuAdapter, ...] = ()
     degraded_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class GpuAdapter:
+    adapter_id: str
+    dedicated_bytes: int
+    shared_bytes: int
+    name: str | None = None
+    is_discrete: bool = False
+    memory_total_mib: int | None = None
 
 
 Runner = Callable[[str, list[str]], Awaitable[str]]
@@ -93,13 +135,30 @@ def parse_nvidia_csv(output: str) -> tuple[GpuDevice, ...]:
     return tuple(devices)
 
 
+def parse_windows_gpu_adapters_json(output: str) -> tuple[GpuAdapter, ...]:
+    data = json.loads(output)
+    adapters: list[GpuAdapter] = []
+    for row in _as_list(data.get("adapters")):
+        adapter_id = _adapter_id(str(row.get("instance", "")))
+        if adapter_id is None:
+            continue
+        adapters.append(
+            GpuAdapter(
+                adapter_id=adapter_id,
+                dedicated_bytes=max(0, int(float(row.get("dedicated", 0)))),
+                shared_bytes=max(0, int(float(row.get("shared", 0)))),
+            )
+        )
+    return tuple(sorted(adapters, key=lambda item: item.adapter_id))
+
+
 def parse_windows_gpu_json(output: str) -> tuple[GpuProcess, ...]:
     data = json.loads(output)
     counters = _as_list(data.get("counters"))
     process_rows = _as_list(data.get("processes"))
     service_rows = _as_list(data.get("services"))
 
-    usage: dict[int, int] = defaultdict(int)
+    usage: dict[tuple[int, str], int] = defaultdict(int)
     for row in counters:
         match = _PID_PATTERN.search(str(row.get("instance", "")))
         if match is None:
@@ -107,9 +166,12 @@ def parse_windows_gpu_json(output: str) -> tuple[GpuProcess, ...]:
         pid = int(match.group(1))
         if not _valid_pid(pid):
             continue
+        adapter_id = _adapter_id(str(row.get("instance", "")))
+        if adapter_id is None:
+            continue
         value = int(float(row.get("value", 0)))
         if value > 0:
-            usage[pid] += value
+            usage[(pid, adapter_id)] += value
 
     metadata: dict[int, dict[str, Any]] = {}
     for row in process_rows:
@@ -125,7 +187,7 @@ def parse_windows_gpu_json(output: str) -> tuple[GpuProcess, ...]:
             services[pid].add(str(name))
 
     processes: list[GpuProcess] = []
-    for pid, dedicated_bytes in usage.items():
+    for (pid, adapter_id), dedicated_bytes in usage.items():
         row = metadata.get(pid, {})
         process_name = _optional_string(row.get("name"))
         path = _optional_string(row.get("path"))
@@ -135,6 +197,7 @@ def parse_windows_gpu_json(output: str) -> tuple[GpuProcess, ...]:
         processes.append(
             GpuProcess(
                 pid=pid,
+                adapter_id=adapter_id,
                 dedicated_bytes=dedicated_bytes,
                 dedicated_mib=dedicated_bytes / (1024**2),
                 process_name=process_name,
@@ -145,7 +208,9 @@ def parse_windows_gpu_json(output: str) -> tuple[GpuProcess, ...]:
                 protected=protected,
             )
         )
-    return tuple(sorted(processes, key=lambda item: (-item.dedicated_bytes, item.pid)))
+    return tuple(
+        sorted(processes, key=lambda item: (-item.dedicated_bytes, item.pid, item.adapter_id))
+    )
 
 
 class GpuMonitor:
@@ -153,11 +218,23 @@ class GpuMonitor:
         self._runner = runner or run_command
         self._cache_seconds = cache_seconds
         self._cached: GpuSnapshot | None = None
+        self._sample_lock = asyncio.Lock()
 
     async def sample(self) -> GpuSnapshot:
         now = time.monotonic()
         if self._cached is not None and now - self._cached.sampled_at < self._cache_seconds:
             return self._cached
+
+        async with self._sample_lock:
+            now = time.monotonic()
+            if (
+                self._cached is not None
+                and now - self._cached.sampled_at < self._cache_seconds
+            ):
+                return self._cached
+            return await self._collect()
+
+    async def _collect(self) -> GpuSnapshot:
 
         reasons: list[str] = []
         try:
@@ -179,14 +256,19 @@ class GpuMonitor:
                 ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_GPU_SCRIPT],
             )
             processes = parse_windows_gpu_json(windows_output)
+            adapters = _label_discrete_adapters(
+                parse_windows_gpu_adapters_json(windows_output), gpus
+            )
         except Exception as error:
             processes = ()
+            adapters = ()
             reasons.append(str(error))
 
         self._cached = GpuSnapshot(
             gpus=gpus,
             processes=processes,
-            sampled_at=now,
+            sampled_at=time.monotonic(),
+            adapters=adapters,
             degraded_reason="; ".join(reason for reason in reasons if reason) or None,
         )
         return self._cached
@@ -236,6 +318,44 @@ def _integer(value: Any) -> int | None:
 
 def _valid_pid(pid: int) -> bool:
     return 1 <= pid <= 4294967295
+
+
+def _adapter_id(instance: str) -> str | None:
+    match = _ADAPTER_PATTERN.search(instance)
+    if match is None:
+        return None
+    return f"{match.group(1).lower()}_phys_{match.group(2)}"
+
+
+def _label_discrete_adapters(
+    adapters: tuple[GpuAdapter, ...], gpus: tuple[GpuDevice, ...]
+) -> tuple[GpuAdapter, ...]:
+    if not adapters or not gpus:
+        return adapters
+    remaining = list(adapters)
+    labels: dict[str, GpuDevice] = {}
+    for gpu in gpus:
+        target = gpu.memory_used_mib * 1024**2
+        closest = min(remaining, key=lambda item: abs(item.dedicated_bytes - target))
+        labels[closest.adapter_id] = gpu
+        remaining.remove(closest)
+        if not remaining:
+            break
+    return tuple(
+        GpuAdapter(
+            adapter_id=item.adapter_id,
+            dedicated_bytes=item.dedicated_bytes,
+            shared_bytes=item.shared_bytes,
+            name=labels[item.adapter_id].name if item.adapter_id in labels else None,
+            is_discrete=item.adapter_id in labels,
+            memory_total_mib=(
+                labels[item.adapter_id].memory_total_mib
+                if item.adapter_id in labels
+                else None
+            ),
+        )
+        for item in adapters
+    )
 
 
 def _optional_string(value: Any) -> str | None:

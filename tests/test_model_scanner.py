@@ -8,8 +8,8 @@ import gguf
 from llama_swap_console.model_scanner import ModelScanner
 
 
-def write_gguf(path: Path) -> None:
-    writer = gguf.GGUFWriter(path, "qwen35")
+def write_gguf(path: Path, architecture: str = "qwen35") -> None:
+    writer = gguf.GGUFWriter(path, architecture)
     writer.add_file_type(15)
     writer.add_quantization_version(2)
     writer.write_header_to_file()
@@ -18,10 +18,15 @@ def write_gguf(path: Path) -> None:
     writer.close()
 
 
-def write_hf_config(path: Path, *, quant_method: str = "compressed-tensors") -> None:
+def write_hf_config(
+    path: Path,
+    *,
+    quant_method: str = "compressed-tensors",
+    model_type: str = "qwen3_5",
+) -> None:
     path.mkdir(parents=True)
     (path / "config.json").write_text(
-        json.dumps({"model_type": "qwen3_5", "quantization_config": {"quant_method": quant_method}}),
+        json.dumps({"model_type": model_type, "quantization_config": {"quant_method": quant_method}}),
         encoding="utf-8",
     )
     (path / "tokenizer.json").write_text("{}", encoding="utf-8")
@@ -139,3 +144,24 @@ def test_scanner_does_not_follow_directory_symlinks(tmp_path: Path) -> None:
         return
 
     assert ModelScanner((root,)).scan() == []
+
+
+def test_scanner_excludes_auxiliary_gguf_models(tmp_path: Path) -> None:
+    write_gguf(tmp_path / "mmproj-kquant.gguf", "clip")
+    write_gguf(tmp_path / "nomic-embed-text.gguf", "nomic-bert")
+    write_gguf(tmp_path / "dflash-kquant.gguf", "dflash")
+    write_gguf(tmp_path / "chat-Q4_K_M.gguf", "qwen35")
+
+    candidates = ModelScanner((tmp_path,)).scan()
+
+    assert [Path(candidate.path).name for candidate in candidates] == [
+        "chat-Q4_K_M.gguf"
+    ]
+
+
+def test_scanner_excludes_embedding_huggingface_models(tmp_path: Path) -> None:
+    embedding = tmp_path / "Qwen3-Embedding"
+    write_hf_config(embedding, model_type="qwen3_embedding")
+    (embedding / "model.safetensors").write_bytes(b"weights")
+
+    assert ModelScanner((tmp_path,)).scan() == []

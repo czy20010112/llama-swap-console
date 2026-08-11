@@ -11,6 +11,17 @@ from typing import Iterable, Literal
 from gguf import GGUFReader
 
 
+_AUXILIARY_GGUF_ARCHITECTURES = {
+    "bert",
+    "clip",
+    "dflash",
+    "eagle",
+    "eagle3",
+    "nomic-bert",
+    "reranker",
+}
+
+
 @dataclass(frozen=True)
 class DiscoveredModel:
     candidate_id: str
@@ -69,11 +80,29 @@ class ModelScanner:
         seen: set[str],
         candidates: list[DiscoveredModel],
     ) -> None:
+        if self._is_auxiliary(candidate):
+            return
         normalized = self._normalize(Path(candidate.path))
         if normalized in registered or normalized in seen:
             return
         seen.add(normalized)
         candidates.append(candidate)
+
+    @staticmethod
+    def _is_auxiliary(candidate: DiscoveredModel) -> bool:
+        architecture = (candidate.architecture or "").casefold()
+        if architecture in _AUXILIARY_GGUF_ARCHITECTURES or any(
+            marker in architecture
+            for marker in ("embedding", "rerank", "reward", "bge")
+        ):
+            return True
+        if candidate.kind != "gguf" or candidate.metadata_readable:
+            return False
+        name = Path(candidate.path).name.casefold()
+        return any(
+            marker in name
+            for marker in ("mmproj", "embed", "rerank", "dflash", "draft", "eagle")
+        )
 
     def _scan_gguf(self, path: Path) -> DiscoveredModel:
         architecture: str | None = None

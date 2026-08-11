@@ -1,10 +1,14 @@
 {
   "counters": [
     {"instance": "pid_2296_luid_0x00000000_0x0000_phys_0", "value": 10737418240},
-    {"instance": "pid_2296_luid_0x00000000_0x0000_phys_1", "value": 1073741824},
-    {"instance": "pid_9056_luid_0x00000000_0x0000_phys_0", "value": 4294967296},
+    {"instance": "pid_2296_luid_0x00000000_0x0001_phys_0", "value": 1073741824},
+    {"instance": "pid_9056_luid_0x00000000_0x0001_phys_0", "value": 4294967296},
     {"instance": "pid_51652_luid_0x00000000_0x0000_phys_0", "value": 0},
     {"instance": "invalid_instance", "value": 999}
+  ],
+  "adapters": [
+    {"instance": "luid_0x00000000_0x0000_phys_0", "dedicated": 10737418240, "shared": 0},
+    {"instance": "luid_0x00000000_0x0001_phys_0", "dedicated": 536870912, "shared": 134217728}
   ],
   "processes": [
     {"pid": 2296, "name": "python", "path": "C:\\Python\\python.exe"},

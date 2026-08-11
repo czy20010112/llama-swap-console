@@ -46,8 +46,11 @@ if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
   python3 -m venv "${VENV_DIR}"
 fi
 
-"${VENV_DIR}/bin/python" -m pip install --quiet --upgrade pip
-"${VENV_DIR}/bin/python" -m pip install --quiet --upgrade "${PROJECT_ROOT}"
+if command -v uv >/dev/null 2>&1; then
+  uv pip install --quiet --python "${VENV_DIR}/bin/python" --upgrade "${PROJECT_ROOT}"
+else
+  "${VENV_DIR}/bin/python" -m pip install --quiet --upgrade "${PROJECT_ROOT}"
+fi
 install -m 0644 "${SOURCE_UNIT}" "${UNIT_PATH}"
 
 systemctl --user daemon-reload

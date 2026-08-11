@@ -8,6 +8,7 @@ from llama_swap_console.command_codec import (
     CommandRoundTripError,
     assert_stable,
 )
+from llama_swap_console.schemas import LlamaCppSettings, ModelSettings
 
 
 LLAMA_COMMAND = r'''"/opt/llama cpp/llama-server" --model "/mnt/d/AI/models/a model.gguf" --port ${PORT} --ctx-size 32768 --n-gpu-layers 99 --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 --jinja --temp 0.8 --top-p 0.95 --vendor-extra "two words"'''
@@ -131,3 +132,22 @@ def test_vllm_serve_positional_model_path_round_trips() -> None:
         "127.0.0.1",
     )
     assert CommandCodec().decode(CommandCodec().encode(decoded)) == decoded
+
+
+def test_encode_omits_blank_optional_llama_cpp_values() -> None:
+    settings = ModelSettings(
+        backend="llama_cpp",
+        launch_tokens=("/opt/llama-server",),
+        model_path="/models/chat.gguf",
+        llama_cpp=LlamaCppSettings(
+            mmproj="",
+            model_draft="   ",
+            spec_type="",
+        ),
+    )
+
+    encoded = CommandCodec().encode(settings)
+
+    assert "--mmproj" not in encoded
+    assert "--model-draft" not in encoded
+    assert "--spec-type" not in encoded

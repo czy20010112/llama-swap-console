@@ -9,7 +9,8 @@ const locales = {
     selectModel: "选择一个模型", load: "加载", unload: "卸载", editSettings: "编辑设置",
     registerModel: "登记模型", basicSettings: "基础设置", memoryContext: "显存与上下文",
     acceleration: "加速与缓存", compatibilityArgs: "兼容参数", gpu: "GPU",
-    gpuProcesses: "显存进程", liveLogs: "实时日志", loading: "加载中",
+    gpuProcesses: "WDDM 显存分配", liveLogs: "实时日志", loading: "加载中",
+    allAdapters: "全部图形适配器", windowsAdapter: "Windows 适配器",
     disconnected: "连接已中断", structuredConfig: "结构化配置",
     saveNotice: "保存前将验证并备份当前配置", cancel: "取消", saveOnly: "仅保存",
     saveReload: "保存并重新加载", copied: "已复制", copyFailed: "复制失败，请检查浏览器剪贴板权限",
@@ -39,7 +40,8 @@ const locales = {
     selectModel: "Select a model", load: "Load", unload: "Unload", editSettings: "Edit settings",
     registerModel: "Register model", basicSettings: "Basic settings", memoryContext: "Memory & context",
     acceleration: "Acceleration & cache", compatibilityArgs: "Compatibility arguments", gpu: "GPU",
-    gpuProcesses: "GPU processes", liveLogs: "Live logs", loading: "Loading",
+    gpuProcesses: "WDDM allocations", liveLogs: "Live logs", loading: "Loading",
+    allAdapters: "All graphics adapters", windowsAdapter: "Windows adapter",
     disconnected: "Disconnected", structuredConfig: "Structured configuration",
     saveNotice: "The current configuration will be validated and backed up", cancel: "Cancel",
     saveOnly: "Save", saveReload: "Save and reload", copied: "Copied",
@@ -69,7 +71,7 @@ const locales = {
 const state = {
   locale: localStorage.getItem("llamaSwapConsole.locale") || "zh-CN",
   models: [], discovered: [], selectedId: null, currentModel: null, editingCandidate: null,
-  query: "", processQuery: "", gpu: null, operationBusy: false, logSource: null,
+  query: "", processQuery: "", gpu: null, gpuAdapter: null, operationBusy: false, logSource: null,
   logRetry: 0, logTimer: null
 };
 const $ = selector => document.querySelector(selector);
@@ -294,17 +296,59 @@ function gpuDevice(device) {
   element.className = "gpu-device";
   element.innerHTML = '<strong></strong><span></span><div class="meter"><i></i></div><div class="gpu-meta"></div>';
   element.querySelector("strong").textContent = device.name;
-  element.querySelector("span").textContent = `${(used / 1024).toFixed(1)} / ${(total / 1024).toFixed(1)} GiB`;
+  element.querySelector("span").textContent = total
+    ? `${(used / 1024).toFixed(1)} / ${(total / 1024).toFixed(1)} GiB`
+    : `${(used / 1024).toFixed(1)} GiB`;
   element.querySelector("i").style.width = `${percent}%`;
-  element.querySelector(".gpu-meta").textContent = `${device.utilization_percent}% · ${device.temperature_c}°C`;
+  element.querySelector(".gpu-meta").textContent = device.utilization_percent == null
+    ? "WDDM"
+    : `${device.utilization_percent}% · ${device.temperature_c}°C`;
   return element;
 }
 
+function adapterName(adapter) {
+  return adapter.name || `${t("windowsAdapter")} ${adapter.adapter_id.split("_").slice(0, 2).join("_")}`;
+}
+
+function renderGpuSelector() {
+  const selector = $("#gpu-selector");
+  const adapters = state.gpu?.adapters || [];
+  const available = new Set(adapters.map(adapter => adapter.adapter_id));
+  if (!state.gpuAdapter || (state.gpuAdapter !== "all" && !available.has(state.gpuAdapter))) {
+    state.gpuAdapter = adapters.find(adapter => adapter.is_discrete)?.adapter_id || "all";
+  }
+  selector.replaceChildren();
+  const all = document.createElement("option");
+  all.value = "all";
+  all.textContent = t("allAdapters");
+  selector.append(all);
+  adapters.forEach(adapter => {
+    const option = document.createElement("option");
+    option.value = adapter.adapter_id;
+    option.textContent = adapterName(adapter);
+    selector.append(option);
+  });
+  selector.value = state.gpuAdapter;
+}
+
 function renderGpu() {
+  renderGpuSelector();
   const summary = $("#gpu-summary");
   summary.replaceChildren();
-  (state.gpu?.gpus || []).forEach(device => summary.append(gpuDevice(device)));
-  if (!state.gpu?.gpus?.length) {
+  const selectedAdapter = (state.gpu?.adapters || []).find(adapter => adapter.adapter_id === state.gpuAdapter);
+  let devices = state.gpuAdapter === "all" ? (state.gpu?.gpus || []) : [];
+  if (selectedAdapter) {
+    const nvidia = (state.gpu?.gpus || []).find(device => device.name === selectedAdapter.name);
+    devices = [nvidia || {
+      name: adapterName(selectedAdapter),
+      memory_used_mib: selectedAdapter.dedicated_bytes / 1024**2,
+      memory_total_mib: selectedAdapter.memory_total_mib,
+      utilization_percent: null,
+      temperature_c: null
+    }];
+  }
+  devices.forEach(device => summary.append(gpuDevice(device)));
+  if (!devices.length) {
     const empty = document.createElement("p");
     empty.className = "empty";
     empty.textContent = state.gpu?.degraded_reason || t("loading");
@@ -312,6 +356,7 @@ function renderGpu() {
   }
   const query = state.processQuery.toLowerCase();
   const processes = (state.gpu?.processes || [])
+    .filter(process => state.gpuAdapter === "all" || process.adapter_id === state.gpuAdapter)
     .filter(process => [process.process_name, process.pid, process.path, ...(process.service_names || [])].join(" ").toLowerCase().includes(query))
     .sort((a, b) => b.dedicated_bytes - a.dedicated_bytes);
   $("#process-count").textContent = String(processes.length);
@@ -323,7 +368,11 @@ function renderGpu() {
     row.innerHTML = '<strong></strong><span class="memory"></span><small></small><button class="copy-button" type="button" title="Copy taskkill command" aria-label="Copy taskkill command">⧉</button>';
     row.querySelector("strong").textContent = process.process_name || `PID ${process.pid}`;
     row.querySelector(".memory").textContent = process.dedicated_mib >= 1024 ? `${(process.dedicated_mib / 1024).toFixed(1)} GiB` : `${process.dedicated_mib.toFixed(0)} MiB`;
-    row.querySelector("small").textContent = [process.service_names?.join(", "), `PID ${process.pid}`, process.path].filter(Boolean).join(" · ");
+    const adapter = (state.gpu?.adapters || []).find(item => item.adapter_id === process.adapter_id);
+    row.querySelector("small").textContent = [
+      state.gpuAdapter === "all" && adapter ? adapterName(adapter) : null,
+      process.service_names?.join(", "), `PID ${process.pid}`, process.path
+    ].filter(Boolean).join(" · ");
     row.querySelector("button").addEventListener("click", async () => {
       try {
         await navigator.clipboard.writeText(process.kill_command);
@@ -436,21 +485,25 @@ function group(title, fields) {
 
 function candidateDefaults(item) {
   const peer = state.models.find(model => model.settings?.backend === item.backend)?.settings;
+  const gib = item.size_bytes / 1024**3;
+  const context = gib >= 24 ? 8192 : gib >= 20 ? 16384 : gib >= 12 ? 32768 : 65536;
+  const gpuUtilization = gib >= 24 ? 0.94 : gib >= 20 ? 0.92 : 0.9;
   return {
     backend: item.backend,
     launch_tokens: peer?.launch_tokens || [],
     model_path: item.path,
     model_argument: peer?.model_argument || (item.backend === "vllm" ? "positional" : "flag"),
-    context_length: 32768,
+    context_length: context,
     port_token: peer?.port_token || "${PORT}",
     llama_cpp: item.backend === "llama_cpp" ? {
       n_gpu_layers: 99, flash_attn: "on", cache_type_k: "q8_0", cache_type_v: "q8_0", jinja: true
     } : null,
     vllm: item.backend === "vllm" ? {
-      gpu_memory_utilization: 0.85, max_num_seqs: 1, enable_chunked_prefill: true,
+      gpu_memory_utilization: gpuUtilization, kv_cache_dtype: "fp8", max_num_seqs: 1,
+      max_num_batched_tokens: Math.min(context, 4096), enable_chunked_prefill: true,
       trust_remote_code: true, reasoning_parser: "qwen3", enable_auto_tool_choice: true,
       tool_call_parser: "qwen3_coder", safetensors_load_strategy: "prefetch",
-      speculative: item.has_mtp ? {method: "mtp", model: null, num_speculative_tokens: 5} : null
+      speculative: null
     } : null,
     unknown_tokens: peer?.unknown_tokens || []
   };
@@ -605,6 +658,7 @@ $("#dialog-language-toggle").addEventListener("click", toggleLocale);
 $("#refresh-all").addEventListener("click", () => Promise.all([loadModels(), loadDiscovered(), loadGpu()]));
 $("#model-search").addEventListener("input", event => { state.query = event.target.value; renderModels(); });
 $("#process-search").addEventListener("input", event => { state.processQuery = event.target.value; renderGpu(); });
+$("#gpu-selector").addEventListener("change", event => { state.gpuAdapter = event.target.value; renderGpu(); });
 $$('[data-mobile-panel]').forEach(button => button.addEventListener("click", () => showMobilePanel(button.dataset.mobilePanel)));
 $("#scan-models").addEventListener("click", async () => {
   try {

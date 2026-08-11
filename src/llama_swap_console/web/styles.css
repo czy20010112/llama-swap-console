@@ -5,4 +5,5 @@
 .field input:read-only,.field select:disabled{background:var(--surface-subtle);color:var(--muted)}
 .candidate-row{grid-template-columns:minmax(0,1fr) auto}.candidate-row .candidate-state{align-self:center;color:var(--ok);font-size:9px;font-weight:650}.candidate-row.incomplete{opacity:.62;cursor:not-allowed}.candidate-row.incomplete .candidate-state{color:var(--warn)}
 .dialog-actions{display:flex;align-items:center;gap:6px}
+.gpu-selector{width:100%;height:31px;margin-top:10px;padding:0 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:11px}
 [hidden]{display:none!important}

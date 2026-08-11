@@ -270,7 +270,9 @@ class CommandCodec:
 
     @staticmethod
     def _append(tokens: list[str], flag: str, value: Any) -> None:
-        if value is None or value is False:
+        if value is None or value is False or (
+            isinstance(value, str) and not value.strip()
+        ):
             return
         tokens.append(flag)
         if value is not True:
