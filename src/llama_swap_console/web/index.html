@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>llama-swap Console</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">LS</span>
+      <div><strong>llama-swap</strong><span>Console</span></div>
+    </div>
+    <div class="topbar-status" id="connection-status"><span class="status-dot"></span><span data-i18n="connecting">正在连接</span></div>
+    <div class="topbar-actions">
+      <button class="icon-button" id="refresh-all" type="button" title="刷新" aria-label="刷新">↻</button>
+      <button class="language-button" id="language-toggle" type="button">EN</button>
+    </div>
+  </header>
+
+  <nav class="mobile-tabs" aria-label="移动视图">
+    <button type="button" data-mobile-panel="models" class="active" data-i18n="models">模型</button>
+    <button type="button" data-mobile-panel="detail" data-i18n="details">详情</button>
+    <button type="button" data-mobile-panel="operations" data-i18n="operations">状态</button>
+  </nav>
+
+  <main class="workspace">
+    <aside id="model-nav" class="column model-nav" data-panel="models">
+      <div class="column-header">
+        <div><p class="eyebrow" data-i18n="library">模型库</p><h1 data-i18n="models">模型</h1></div>
+        <button id="scan-models" class="icon-button" type="button" title="扫描模型" aria-label="扫描模型">⌕</button>
+      </div>
+      <label class="search-field">
+        <span aria-hidden="true">⌕</span>
+        <input id="model-search" type="search" data-i18n-placeholder="searchModels" placeholder="搜索模型、路径或 ID">
+      </label>
+      <section class="nav-section">
+        <div class="section-label"><span data-i18n="running">正在运行</span><output id="running-count">0</output></div>
+        <div id="running-models" class="model-list"><p class="empty" data-i18n="noneRunning">暂无运行模型</p></div>
+      </section>
+      <section class="nav-section grow">
+        <div class="section-label"><span data-i18n="allModels">全部模型</span><output id="model-count">0</output></div>
+        <div id="model-list" class="model-list" aria-live="polite"></div>
+      </section>
+      <section class="nav-section discovered-section">
+        <button class="section-label section-toggle" id="toggle-discovered" type="button">
+          <span data-i18n="discovered">待登记模型</span><output id="discovered-count">0</output>
+        </button>
+        <div id="discovered-models" class="model-list"></div>
+      </section>
+    </aside>
+
+    <section id="model-detail" class="column model-detail" data-panel="detail" aria-live="polite">
+      <div id="detail-empty" class="empty-stage">
+        <span class="empty-glyph" aria-hidden="true">M</span>
+        <h2 data-i18n="selectModel">选择一个模型</h2>
+      </div>
+      <div id="detail-content" hidden>
+        <div class="detail-heading">
+          <div class="detail-title"><span id="detail-status" class="status-pill">—</span><h2 id="detail-name"></h2><code id="detail-id"></code></div>
+          <div class="command-bar">
+            <button id="load-model" class="button primary" type="button"><span aria-hidden="true">▶</span><span data-i18n="load">加载</span></button>
+            <button id="unload-model" class="button" type="button"><span aria-hidden="true">■</span><span data-i18n="unload">卸载</span></button>
+            <button id="edit-model" class="button" type="button"><span aria-hidden="true">✎</span><span data-i18n="editSettings">编辑设置</span></button>
+          </div>
+        </div>
+        <p id="detail-description" class="description"></p>
+        <div id="compatibility-error" class="error-banner" hidden></div>
+        <section class="detail-section">
+          <h3 data-i18n="basicSettings">基础设置</h3>
+          <dl id="basic-settings" class="definition-grid"></dl>
+        </section>
+        <section class="detail-section">
+          <h3 data-i18n="memoryContext">显存与上下文</h3>
+          <dl id="memory-settings" class="definition-grid"></dl>
+        </section>
+        <section class="detail-section">
+          <h3 data-i18n="acceleration">加速与缓存</h3>
+          <dl id="acceleration-settings" class="definition-grid"></dl>
+        </section>
+        <section class="detail-section" id="unknown-section" hidden>
+          <h3 data-i18n="compatibilityArgs">兼容参数</h3>
+          <code id="unknown-args" class="code-block"></code>
+        </section>
+      </div>
+    </section>
+
+    <aside id="operations-panel" class="column operations-panel" data-panel="operations">
+      <section class="ops-section gpu-section">
+        <div class="ops-heading"><h2 data-i18n="gpu">GPU</h2><span id="gpu-source">NVIDIA / WDDM</span></div>
+        <div id="gpu-summary" class="gpu-summary"><p class="empty" data-i18n="loading">加载中</p></div>
+      </section>
+      <section class="ops-section process-section">
+        <div class="ops-heading"><h2 data-i18n="gpuProcesses">显存进程</h2><output id="process-count">0</output></div>
+        <label class="compact-search"><input id="process-search" type="search" data-i18n-placeholder="searchProcesses" placeholder="进程、服务或 PID"></label>
+        <div id="process-list" class="process-list"></div>
+      </section>
+      <section class="ops-section log-section">
+        <div class="ops-heading"><h2 data-i18n="liveLogs">实时日志</h2><span id="log-status" class="muted" data-i18n="disconnected">未连接</span></div>
+        <pre id="live-logs" class="log-view" tabindex="0"></pre>
+      </section>
+    </aside>
+  </main>
+
+  <dialog id="model-editor" aria-labelledby="editor-title">
+    <form id="editor-form" method="dialog">
+      <header class="dialog-header"><div><p class="eyebrow" data-i18n="structuredConfig">结构化配置</p><h2 id="editor-title" data-i18n="editSettings">编辑设置</h2></div><div class="dialog-actions"><button class="language-button" id="dialog-language-toggle" type="button">EN</button><button class="icon-button" value="cancel" aria-label="关闭" type="submit">×</button></div></header>
+      <div id="editor-errors" class="error-banner" hidden aria-live="assertive"></div>
+      <div id="editor-fields" class="dialog-body"></div>
+      <footer class="dialog-footer"><span data-i18n="saveNotice">保存前将验证并备份当前配置</span><div><button class="button" value="cancel" type="submit" data-i18n="cancel">取消</button><button id="save-only" class="button" value="save" type="submit" data-i18n="saveOnly">仅保存</button><button id="save-reload" class="button primary" value="reload" type="submit" data-i18n="saveReload">保存并重新加载</button></div></footer>
+    </form>
+  </dialog>
+  <div id="toast" class="toast" aria-live="polite"></div>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

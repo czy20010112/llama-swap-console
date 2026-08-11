@@ -4,6 +4,9 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 
 from llama_swap_console.api import install_error_handlers, local_origin_middleware, router
 from llama_swap_console.command_codec import CommandCodec
@@ -48,6 +51,13 @@ def create_app(
     application.middleware("http")(local_origin_middleware)
     application.include_router(router)
     install_error_handlers(application)
+
+    web_root = Path(__file__).parent / "web"
+    application.mount("/assets", StaticFiles(directory=web_root), name="assets")
+
+    @application.get("/", include_in_schema=False)
+    async def web_index():
+        return FileResponse(web_root / "index.html")
 
     @application.get("/api/health")
     async def health() -> dict[str, str]:

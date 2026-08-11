@@ -21,6 +21,10 @@ CONFIG = """models:
     description: Existing model
     cmd: /opt/llama-server --model "{model}" --port ${{PORT}} --ctx-size 4096
     customKey: keep-me
+  zeta:
+    name: Able
+    description: Sort before Alpha by display name
+    cmd: /opt/llama-server --model "{model}" --port ${{PORT}} --ctx-size 2048
 """
 
 
@@ -95,8 +99,8 @@ def test_lists_and_reads_structured_models(console) -> None:
     detail = client.get("/api/models/alpha")
 
     assert listing.status_code == 200
-    assert listing.json()["models"][0]["id"] == "alpha"
-    assert listing.json()["models"][0]["status"] == "unloaded"
+    assert [item["id"] for item in listing.json()["models"]] == ["zeta", "alpha"]
+    assert listing.json()["models"][1]["status"] == "unloaded"
     assert listing.json()["llama_swap_available"] is True
     assert detail.status_code == 200
     assert detail.json()["settings"]["backend"] == "llama_cpp"
@@ -137,6 +141,24 @@ def test_update_rejects_stale_revision_and_raw_command_fields(console) -> None:
     assert client.put("/api/models/alpha", json=body).status_code == 409
     body["cmd"] = "rm -rf something"
     assert client.put("/api/models/alpha", json=body).status_code == 422
+
+
+def test_update_rejects_launcher_or_unknown_argument_changes(console) -> None:
+    client, _, _, _ = console
+    detail = client.get("/api/models/alpha").json()
+    body = {
+        "revision": detail["revision"],
+        "name": "Alpha",
+        "description": "",
+        "settings": detail["settings"],
+        "reload": False,
+    }
+    body["settings"]["launch_tokens"] = ["/tmp/arbitrary-launcher"]
+
+    response = client.put("/api/models/alpha", json=body)
+
+    assert response.status_code == 422
+    assert "read-only" in response.json()["detail"]
 
 
 def test_external_origin_cannot_call_write_api(console) -> None:
@@ -224,6 +246,35 @@ def test_registration_rejects_path_outside_allowed_root(console, tmp_path: Path)
     )
 
     assert response.status_code == 422
+
+
+def test_registration_rejects_untrusted_launcher(console) -> None:
+    client, _, _, model_root = console
+    candidate = model_root / "untrusted.gguf"
+    candidate.write_bytes(b"candidate")
+    scan = client.post("/api/scan").json()
+    discovered = client.get("/api/discovered-models").json()["models"]
+    item = next(row for row in discovered if row["path"].endswith("untrusted.gguf"))
+
+    response = client.post(
+        f"/api/discovered-models/{item['candidate_id']}/register",
+        json={
+            "revision": scan["revision"],
+            "model_id": "untrusted",
+            "name": "Untrusted",
+            "description": "",
+            "settings": {
+                "backend": "llama_cpp",
+                "launch_tokens": ["/tmp/arbitrary-launcher"],
+                "model_path": str(candidate),
+                "context_length": 4096,
+                "llama_cpp": {},
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "trusted launcher" in response.json()["detail"]
 
 
 def test_failed_hot_reload_restores_configuration(console) -> None:

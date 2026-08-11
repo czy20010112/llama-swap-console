@@ -71,8 +71,9 @@ class ModelService:
         snapshot = self.store.read()
         models = [
             self._detail(snapshot, model_id)
-            for model_id in sorted(self._models(snapshot), key=str.casefold)
+            for model_id in self._models(snapshot)
         ]
+        models.sort(key=lambda item: (item["name"].casefold(), item["id"].casefold()))
         try:
             upstream = await self.swap.models()
             statuses = {
@@ -99,6 +100,7 @@ class ModelService:
     ) -> dict[str, Any]:
         snapshot = self.store.read()
         existing = self._require_model(snapshot, model_id)
+        self._ensure_immutable_command_fields(existing, request.settings)
         self._ensure_allowed_path(Path(request.settings.model_path))
         entry = copy.deepcopy(existing)
         entry["name"] = request.name
@@ -138,10 +140,15 @@ class ModelService:
         candidate = self._discovered.get(candidate_id)
         if candidate is None:
             raise ServiceNotFound("Discovered model is unknown or expired")
+        if not candidate.complete:
+            raise ServiceValidationError(candidate.reason or "Model download is incomplete")
+        if request.settings.backend != candidate.backend:
+            raise ServiceValidationError("Backend does not match the discovered candidate")
         requested_path = Path(request.settings.model_path).resolve(strict=False)
         if requested_path != Path(candidate.path).resolve(strict=False):
             raise ServiceValidationError("Model path does not match the discovered candidate")
         self._ensure_allowed_path(requested_path)
+        self._ensure_trusted_registration_template(self.store.read(), request.settings)
         entry = CommentedMap(
             {
                 "name": request.name,
@@ -227,6 +234,37 @@ class ModelService:
             raise ServiceValidationError("Model path is outside the allowed model roots")
         if not resolved.exists():
             raise ServiceValidationError("Model path does not exist")
+
+    def _ensure_immutable_command_fields(
+        self, existing: CommentedMap, requested: Any
+    ) -> None:
+        command = existing.get("cmd")
+        if not isinstance(command, str):
+            raise ServiceValidationError("Existing model command is missing")
+        try:
+            current = self.codec.decode(command)
+        except CommandDecodeError as error:
+            raise ServiceValidationError(str(error)) from error
+        immutable = ("backend", "launch_tokens", "model_argument", "port_token", "unknown_tokens")
+        if any(getattr(current, key) != getattr(requested, key) for key in immutable):
+            raise ServiceValidationError("Launcher and compatibility arguments are read-only")
+
+    def _ensure_trusted_registration_template(
+        self, snapshot: ConfigSnapshot, requested: Any
+    ) -> None:
+        immutable = ("backend", "launch_tokens", "model_argument", "port_token", "unknown_tokens")
+        for entry in self._models(snapshot).values():
+            if not isinstance(entry, CommentedMap) or not isinstance(entry.get("cmd"), str):
+                continue
+            try:
+                current = self.codec.decode(entry["cmd"])
+            except CommandDecodeError:
+                continue
+            if all(getattr(current, key) == getattr(requested, key) for key in immutable):
+                return
+        raise ServiceValidationError(
+            "No trusted launcher template exists for this backend"
+        )
 
     async def _confirm_hot_reload(self, model_id: str) -> None:
         deadline = time.monotonic() + self.reload_timeout
