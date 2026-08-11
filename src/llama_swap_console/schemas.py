@@ -71,3 +71,23 @@ class ModelSettings(BaseModel):
         if not self.launch_tokens:
             raise ValueError("launch_tokens cannot be empty")
         return self
+
+
+class ModelUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    revision: str
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=2000)
+    settings: ModelSettings
+    reload: bool = False
+
+
+class ModelRegisterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    revision: str
+    model_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=2000)
+    settings: ModelSettings
