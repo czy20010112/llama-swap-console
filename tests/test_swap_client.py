@@ -45,6 +45,7 @@ async def test_load_and_unload_quote_model_ids(client: LlamaSwapClient) -> None:
     assert await client.load("a/b model") == {"status": "ready"}
     assert await client.unload("a/b model") == {"ok": True}
     assert load.called and unload.called
+    assert load.calls.last.request.extensions["timeout"]["read"] == 10.0
 
 
 @respx.mock

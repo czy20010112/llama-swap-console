@@ -52,6 +52,7 @@ install -m 0644 "${SOURCE_UNIT}" "${UNIT_PATH}"
 
 systemctl --user daemon-reload
 systemctl --user enable --now llama-swap-console.service
+systemctl --user restart llama-swap-console.service
 
 healthy=0
 for _ in {1..30}; do

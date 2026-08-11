@@ -17,6 +17,8 @@ def test_systemd_user_service_is_local_and_hardened() -> None:
     assert "LLAMA_SWAP_CONSOLE_CONFIG_PATH=%h/.config/llama-swap/config.yaml" in unit
     assert "LLAMA_SWAP_CONSOLE_MODEL_ROOTS" in unit
     assert "/mnt/d/AI/models" in unit
+    assert "/usr/lib/wsl/lib" in unit
+    assert "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0" in unit
     assert "Restart=on-failure" in unit
     assert "NoNewPrivileges=true" in unit
     assert "ProtectSystem=strict" in unit
@@ -29,6 +31,7 @@ def test_installer_is_idempotent_and_checks_health() -> None:
     assert "pip install" in script
     assert "systemctl --user daemon-reload" in script
     assert "systemctl --user enable --now llama-swap-console.service" in script
+    assert "systemctl --user restart llama-swap-console.service" in script
     assert "http://127.0.0.1:9293/api/health" in script
     assert "http://localhost:9293" in script
 

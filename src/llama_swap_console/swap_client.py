@@ -37,7 +37,9 @@ class LlamaSwapClient:
 
     async def load(self, model_id: str) -> Any:
         encoded = quote(model_id, safe="")
-        return await self._request("GET", f"/upstream/{encoded}/")
+        return await self._request(
+            "GET", f"/upstream/{encoded}/", timeout=httpx.Timeout(10.0)
+        )
 
     async def unload(self, model_id: str) -> Any:
         encoded = quote(model_id, safe="")
@@ -76,10 +78,12 @@ class LlamaSwapClient:
         except httpx.RequestError as error:
             raise SwapUnavailable(str(error)) from error
 
-    async def _request(self, method: str, path: str) -> Any:
+    async def _request(
+        self, method: str, path: str, *, timeout: httpx.Timeout | None = None
+    ) -> Any:
         try:
             response = await self._client.request(
-                method, path, timeout=self._request_timeout
+                method, path, timeout=timeout or self._request_timeout
             )
         except httpx.RequestError as error:
             raise SwapUnavailable(str(error)) from error

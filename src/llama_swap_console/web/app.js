@@ -110,8 +110,17 @@ function setConnection(online) {
   const element = $("#connection-status");
   element.classList.toggle("online", online);
   element.lastElementChild.textContent = t(online ? "connected" : "offline");
-  $("#load-model").disabled = !online || state.operationBusy;
-  $("#unload-model").disabled = !online || state.operationBusy;
+  updateCommandButtons(online);
+}
+
+function isActiveStatus(status) {
+  return ["running", "loaded", "ready", "starting"].includes(status);
+}
+
+function updateCommandButtons(online = $("#connection-status").classList.contains("online")) {
+  const active = isActiveStatus(state.currentModel?.status);
+  $("#load-model").disabled = !online || state.operationBusy || active;
+  $("#unload-model").disabled = !online || state.operationBusy || !active;
 }
 
 function modelMatches(model) {
@@ -126,7 +135,7 @@ function modelButton(model) {
   button.innerHTML = '<strong></strong><span class="mini-status"></span><code></code>';
   button.querySelector("strong").textContent = model.name || model.id;
   button.querySelector("code").textContent = model.id;
-  button.querySelector(".mini-status").classList.toggle("running", model.status === "running");
+  button.querySelector(".mini-status").classList.toggle("running", isActiveStatus(model.status));
   button.addEventListener("click", () => selectModel(model.id));
   return button;
 }
@@ -144,7 +153,7 @@ function renderModels() {
     list.append(empty);
   }
   models.forEach(model => list.append(modelButton(model)));
-  const running = models.filter(model => model.status === "running");
+  const running = models.filter(model => isActiveStatus(model.status));
   $("#running-count").textContent = String(running.length);
   const runningList = $("#running-models");
   runningList.replaceChildren();
@@ -221,7 +230,8 @@ function renderDetail(model) {
   $("#detail-description").textContent = model.description || "";
   const status = $("#detail-status");
   status.textContent = model.status || t("unknown");
-  status.className = `status-pill ${model.status === "running" ? "running" : ""}`;
+  status.className = `status-pill ${isActiveStatus(model.status) ? "running" : ""}`;
+  updateCommandButtons();
   const error = $("#compatibility-error");
   error.hidden = !model.compatibility_error;
   error.textContent = model.compatibility_error || "";

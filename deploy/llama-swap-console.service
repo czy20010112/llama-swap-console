@@ -5,6 +5,7 @@ After=network.target
 [Service]
 Type=simple
 Environment="PYTHONUNBUFFERED=1"
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/wsl/lib:/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0"
 Environment="LLAMA_SWAP_CONSOLE_CONFIG_PATH=%h/.config/llama-swap/config.yaml"
 Environment="LLAMA_SWAP_CONSOLE_MODEL_ROOTS=[\"/mnt/d/AI/models\"]"
 Environment="LLAMA_SWAP_CONSOLE_LLAMA_SWAP_URL=http://127.0.0.1:9292"
