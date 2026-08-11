@@ -1,0 +1,26 @@
+[Unit]
+Description=llama-swap local management console
+After=network.target
+
+[Service]
+Type=simple
+Environment="PYTHONUNBUFFERED=1"
+Environment="LLAMA_SWAP_CONSOLE_CONFIG_PATH=%h/.config/llama-swap/config.yaml"
+Environment="LLAMA_SWAP_CONSOLE_MODEL_ROOTS=[\"/mnt/d/AI/models\"]"
+Environment="LLAMA_SWAP_CONSOLE_LLAMA_SWAP_URL=http://127.0.0.1:9292"
+Environment="LLAMA_SWAP_CONSOLE_BACKUP_DIR=%h/.local/state/llama-swap-console/backups"
+ExecStart=%h/.local/share/llama-swap-console/.venv/bin/python -m uvicorn llama_swap_console.app:app --host 127.0.0.1 --port 9293
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.config/llama-swap %h/.local/state/llama-swap-console
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=default.target
