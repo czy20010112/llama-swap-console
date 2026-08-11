@@ -121,7 +121,9 @@ class ModelService:
     async def scan(self) -> dict[str, Any]:
         snapshot = self.store.read()
         registered = self._registered_paths(snapshot)
-        candidates = self.scanner.scan(registered_paths=registered)
+        candidates = await asyncio.to_thread(
+            self.scanner.scan, registered_paths=registered
+        )
         self._discovered = {item.candidate_id: item for item in candidates}
         self._scan_time = time.monotonic()
         return {
