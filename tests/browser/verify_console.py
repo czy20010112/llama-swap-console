@@ -276,6 +276,56 @@ def main() -> None:
         page.get_by_text("Qwen-27B-Q4_K_M.gguf", exact=True).click()
         assert page.locator('[data-path="context_length"]').input_value() == "32768"
         page.get_by_role("button", name="Cancel", exact=True).click()
+
+        lifecycle_calls = {"load": 0, "models": 0}
+
+        def lifecycle_route(route: Route) -> None:
+            request = route.request
+            path = request.url.removeprefix(BASE_URL)
+            if path == "/api/models/fable-a/load":
+                lifecycle_calls["load"] += 1
+                json_response(route, {"result": None, "status": "loading"}, 202)
+            elif path == "/api/models":
+                lifecycle_calls["models"] += 1
+                status = "loading" if lifecycle_calls["models"] < 3 else "ready"
+                models = [dict(item, status=status if item["id"] == "fable-a" else item["status"]) for item in MODELS]
+                json_response(route, {"models": models, "revision": "a" * 64, "llama_swap_available": True})
+            else:
+                api_route(route)
+
+        page.unroute(f"{BASE_URL}/api/**", api_route)
+        page.route(f"{BASE_URL}/api/**", lifecycle_route)
+        page.get_by_text("Fable Fusion NVFP4A16", exact=True).first.click()
+        load_button = page.get_by_role("button", name="Load", exact=True)
+        load_button.click()
+        expect(load_button).to_be_disabled()
+        page.wait_for_timeout(2400)
+        assert lifecycle_calls["load"] == 1
+        expect(page.locator("#detail-status")).to_have_text("ready")
+
+        failures = {"load": 0, "models": 0}
+
+        def failed_lifecycle_route(route: Route) -> None:
+            request = route.request
+            path = request.url.removeprefix(BASE_URL)
+            if path == "/api/models/fable-a/load":
+                failures["load"] += 1
+                json_response(route, {"detail": "upstream unavailable"}, 503)
+            elif path == "/api/models":
+                failures["models"] += 1
+                json_response(route, {"models": MODELS, "revision": "a" * 64, "llama_swap_available": True})
+            else:
+                api_route(route)
+
+        page.unroute(f"{BASE_URL}/api/**", lifecycle_route)
+        page.route(f"{BASE_URL}/api/**", failed_lifecycle_route)
+        page.reload()
+        page.get_by_text("Fable Fusion NVFP4A16", exact=True).first.click()
+        page.get_by_role("button", name="Load", exact=True).click()
+        page.wait_for_timeout(400)
+        assert failures["load"] == 1
+        assert failures["models"] == 2
+
         page.wait_for_timeout(2300)
         page.screenshot(path=SCREENSHOTS / "console-1440x900.png", full_page=True)
 

@@ -52,3 +52,19 @@ def test_javascript_contains_complete_locale_roots() -> None:
     assert '"zh-CN"' in script
     assert '"en"' in script
     assert "localStorage" in script
+
+
+def test_javascript_has_bounded_starting_state_polling() -> None:
+    script = (
+        Path(__file__).parents[1]
+        / "src"
+        / "llama_swap_console"
+        / "web"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "OPERATION_STATUS_MAX_POLLS" in script
+    assert "waitForOperationStatus" in script
+    assert '["starting", "loading", "pending"].includes(operation.status)' in script
+    assert '["running", "loaded", "ready", "starting", "loading", "pending"]' in script
+    assert 'const transitioning = ["starting", "loading", "pending"].includes(status);' in script

@@ -72,8 +72,10 @@ const state = {
   locale: localStorage.getItem("llamaSwapConsole.locale") || "zh-CN",
   models: [], discovered: [], selectedId: null, currentModel: null, editingCandidate: null,
   query: "", processQuery: "", gpu: null, gpuAdapter: null, operationBusy: false, logSource: null,
-  logRetry: 0, logTimer: null
+  logRetry: 0, logTimer: null, operationPollTimer: null
 };
+const OPERATION_STATUS_POLL_MS = 1000;
+const OPERATION_STATUS_MAX_POLLS = 30;
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const t = key => locales[state.locale][key] || key;
@@ -116,13 +118,15 @@ function setConnection(online) {
 }
 
 function isActiveStatus(status) {
-  return ["running", "loaded", "ready", "starting"].includes(status);
+  return ["running", "loaded", "ready", "starting", "loading", "pending"].includes(status);
 }
 
 function updateCommandButtons(online = $("#connection-status").classList.contains("online")) {
-  const active = isActiveStatus(state.currentModel?.status);
+  const status = state.currentModel?.status;
+  const active = isActiveStatus(status);
+  const transitioning = ["starting", "loading", "pending"].includes(status);
   $("#load-model").disabled = !online || state.operationBusy || active;
-  $("#unload-model").disabled = !online || state.operationBusy || !active;
+  $("#unload-model").disabled = !online || state.operationBusy || transitioning || !active;
 }
 
 function modelMatches(model) {
@@ -632,14 +636,27 @@ async function runModelOperation(action) {
   $("#load-model").disabled = true;
   $("#unload-model").disabled = true;
   try {
-    await api(`/api/models/${encodeURIComponent(state.selectedId)}/${action}`, {method: "POST", body: "{}"});
+    const operation = await api(`/api/models/${encodeURIComponent(state.selectedId)}/${action}`, {method: "POST", body: "{}"});
     await loadModels();
+    if (action === "load" && ["starting", "loading", "pending"].includes(operation.status)) await waitForOperationStatus(state.selectedId);
   } catch (error) {
     showToast(`${t("operationFailed")}: ${error.message}`);
+    await loadModels();
   } finally {
     state.operationBusy = false;
     setConnection($("#connection-status").classList.contains("online"));
   }
+}
+
+async function waitForOperationStatus(modelId) {
+  clearTimeout(state.operationPollTimer);
+  for (let attempt = 0; attempt < OPERATION_STATUS_MAX_POLLS; attempt += 1) {
+    await new Promise(resolve => { state.operationPollTimer = setTimeout(resolve, OPERATION_STATUS_POLL_MS); });
+    await loadModels();
+    const model = state.models.find(item => item.id === modelId);
+    if (!model || !["starting", "loading", "pending"].includes(model.status)) return;
+  }
+  await loadModels();
 }
 
 function toggleLocale() {

@@ -94,6 +94,60 @@ def test_register_model_adds_entry_without_changing_existing_entry(tmp_path: Pat
     assert result.document["models"]["beta"]["cmd"] == "beta-command"
 
 
+def test_remove_restore_and_discard_intermediate_backup_preserve_the_original_rollback_point(tmp_path: Path) -> None:
+    store, config_path, backup_dir = make_store(tmp_path)
+    original = store.read()
+
+    removed = store.remove_model("alpha", original.revision)
+    restored_entry = CommentedMap({"cmd": "new-command"})
+    updated = store.register_model("alpha", restored_entry, removed.revision)
+    store.discard_backup(updated.backup_path)
+
+    assert updated.document["models"]["alpha"] == restored_entry
+    assert len(list(backup_dir.glob("*-config.yaml"))) == 1
+    store.rollback_latest()
+    assert config_path.read_bytes() == SOURCE
+
+
+def test_restore_replaces_the_current_configuration_without_creating_another_backup(tmp_path: Path) -> None:
+    store, config_path, backup_dir = make_store(tmp_path)
+    original = store.read()
+    removed = store.remove_model("alpha", original.revision)
+
+    store.restore(original.raw, expected_revision=removed.revision)
+
+    assert store.read().raw == original.raw
+    assert config_path.read_bytes() == SOURCE
+    assert len(list(backup_dir.glob("*-config.yaml"))) == 1
+    assert "alpha" not in removed.document["models"]
+
+
+def test_restore_rejects_an_external_change_instead_of_overwriting_it(tmp_path: Path) -> None:
+    store, config_path, _ = make_store(tmp_path)
+    original = store.read()
+    changed = store.remove_model("alpha", original.revision)
+    external = b"models:\n  external:\n    cmd: external\n"
+    config_path.write_bytes(external)
+
+    with pytest.raises(RevisionConflict, match="modified externally"):
+        store.restore(original.raw, expected_revision=changed.revision)
+
+    assert config_path.read_bytes() == external
+
+
+def test_backup_cleanup_removes_only_the_backup_owned_by_the_mutation(tmp_path: Path) -> None:
+    store, _, backup_dir = make_store(tmp_path)
+    original = store.read()
+    first = store.update_model("alpha", CommentedMap({"cmd": "one"}), original.revision)
+    second = store.update_model("alpha", CommentedMap({"cmd": "two"}), first.revision)
+
+    store.discard_backup(first.backup_path)
+
+    backups = set(backup_dir.glob("*-config.yaml"))
+    assert first.backup_path not in backups
+    assert second.backup_path in backups
+
+
 def test_backup_retention_keeps_newest_limit(tmp_path: Path) -> None:
     store, _, backup_dir = make_store(tmp_path, backup_limit=3)
 

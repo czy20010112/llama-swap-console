@@ -11,6 +11,12 @@ systemctl --user status llama-swap-console.service
 journalctl --user -u llama-swap-console.service -f
 ```
 
+## 模型加载与热重载
+
+- 管理台对单个模型合并并发的加载请求，加载或卸载不会重复触发上游操作。
+- 上游已开始加载但 10 秒内未完成时，管理台返回 `202` 和 `status: starting`；网页会保持按钮禁用，每秒刷新一次，最多 30 次。无法连接 llama-swap 仍返回 `503`，上游非成功响应仍显示为网关错误。
+- 编辑已存在模型时，llama-swap 的公开模型接口不提供配置 watcher 的版本号。管理台会先暂时移除该模型，确认上游列表确实观察到它缺失，再恢复更新后的条目并确认它重新出现；任一阶段超时都会恢复写前配置。这避免了“旧 ID 持续存在”被误判为新配置已生效。
+
 ## Fable 基线配置
 
 模型 ID：`Qwen3.6-27B-Fable-NVFP4-MTP`

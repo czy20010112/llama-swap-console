@@ -60,12 +60,24 @@ async def update_model(model_id: str, body: ModelUpdateRequest, request: Request
 
 @router.post("/models/{model_id}/load")
 async def load_model(model_id: str, request: Request):
-    return {"result": await service(request).load(model_id)}
+    result = await service(request).load(model_id)
+    content = {"result": result.result}
+    if result.status is not None:
+        content["status"] = result.status
+    return JSONResponse(
+        status_code=202 if result.accepted else 200,
+        content=content,
+    )
 
 
 @router.post("/models/{model_id}/unload")
 async def unload_model(model_id: str, request: Request):
-    return {"result": await service(request).unload(model_id)}
+    result = await service(request).unload(model_id)
+    if result.accepted:
+        return JSONResponse(
+            status_code=202, content={"result": result.result, "status": result.status}
+        )
+    return {"result": result.result}
 
 
 @router.post("/models/unload-all")

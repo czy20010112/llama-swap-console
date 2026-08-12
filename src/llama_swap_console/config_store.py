@@ -28,6 +28,7 @@ class ConfigSnapshot:
     document: CommentedMap
     revision: str
     raw: bytes
+    backup_path: Path | None = None
 
 
 class ConfigStore:
@@ -69,6 +70,34 @@ class ConfigStore:
 
         return self._mutate(revision, mutate)
 
+    def remove_model(self, model_id: str, revision: str) -> ConfigSnapshot:
+        def mutate(document: CommentedMap) -> None:
+            models = self._models_mapping(document)
+            if model_id not in models:
+                raise ConfigValidationError(f"Model {model_id!r} does not exist")
+            del models[model_id]
+
+        return self._mutate(revision, mutate)
+
+    def restore(self, raw: bytes, *, expected_revision: str) -> ConfigSnapshot:
+        with self._lock:
+            current = self._read_unlocked()
+            if current.revision != expected_revision:
+                raise RevisionConflict("Configuration was modified externally")
+            self._parse(raw)
+            self._replace_with(raw)
+            return self._read_unlocked()
+
+    def discard_backup(self, backup_path: Path | None) -> None:
+        if backup_path is None:
+            return
+        with self._lock:
+            resolved = Path(backup_path).resolve(strict=False)
+            backup_root = self.backup_dir.resolve(strict=False)
+            if resolved.parent != backup_root:
+                raise ConfigValidationError("Backup does not belong to this store")
+            resolved.unlink(missing_ok=True)
+
     def rollback_latest(self) -> ConfigSnapshot:
         with self._lock:
             backups = sorted(self.backup_dir.glob("*-config.yaml"))
@@ -89,9 +118,15 @@ class ConfigStore:
             mutate(current.document)
             candidate = self._dump(current.document)
             self._parse(candidate)
-            self._backup(current.raw)
+            backup_path = self._backup(current.raw)
             self._replace_with(candidate)
-            return self._read_unlocked()
+            updated = self._read_unlocked()
+            return ConfigSnapshot(
+                document=updated.document,
+                revision=updated.revision,
+                raw=updated.raw,
+                backup_path=backup_path,
+            )
 
     def _read_unlocked(self) -> ConfigSnapshot:
         try:
@@ -126,7 +161,7 @@ class ConfigStore:
         self._yaml.dump(document, stream)
         return stream.getvalue().encode("utf-8")
 
-    def _backup(self, raw: bytes) -> None:
+    def _backup(self, raw: bytes) -> Path:
         self.backup_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
         backup_path = self.backup_dir / f"{stamp}-config.yaml"
@@ -137,6 +172,7 @@ class ConfigStore:
         backups = sorted(self.backup_dir.glob("*-config.yaml"))
         for expired in backups[: -self.backup_limit]:
             expired.unlink()
+        return backup_path
 
     def _replace_with(self, raw: bytes) -> None:
         self.config_path.parent.mkdir(parents=True, exist_ok=True)

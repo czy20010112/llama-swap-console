@@ -12,6 +12,10 @@ class SwapUnavailable(Exception):
     """llama-swap could not be reached."""
 
 
+class SwapReadTimeout(SwapUnavailable):
+    """llama-swap did not finish a lifecycle request before its read deadline."""
+
+
 class SwapResponseError(Exception):
     """llama-swap returned a non-success response."""
 
@@ -85,6 +89,8 @@ class LlamaSwapClient:
             response = await self._client.request(
                 method, path, timeout=timeout or self._request_timeout
             )
+        except httpx.ReadTimeout as error:
+            raise SwapReadTimeout(str(error)) from error
         except httpx.RequestError as error:
             raise SwapUnavailable(str(error)) from error
         if not response.is_success:

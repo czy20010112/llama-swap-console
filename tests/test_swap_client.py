@@ -7,6 +7,7 @@ import respx
 
 from llama_swap_console.swap_client import (
     LlamaSwapClient,
+    SwapReadTimeout,
     SwapResponseError,
     SwapUnavailable,
 )
@@ -50,6 +51,18 @@ async def test_load_and_unload_quote_model_ids(client: LlamaSwapClient) -> None:
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_load_returns_none_for_a_successful_empty_response(
+    client: LlamaSwapClient,
+) -> None:
+    respx.get("http://127.0.0.1:9292/upstream/alpha/").mock(
+        return_value=httpx.Response(200)
+    )
+
+    assert await client.load("alpha") is None
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_unload_all_and_health(client: LlamaSwapClient) -> None:
     respx.post("http://127.0.0.1:9292/api/models/unload").mock(
         return_value=httpx.Response(204)
@@ -88,6 +101,20 @@ async def test_connection_errors_are_normalized() -> None:
         with pytest.raises(SwapUnavailable, match="offline"):
             await client.models()
         assert await client.is_available() is False
+
+
+@pytest.mark.asyncio
+async def test_load_read_timeout_is_distinguished_from_an_unavailable_upstream() -> None:
+    async def fail(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow load", request=request)
+
+    async with httpx.AsyncClient(
+        base_url="http://127.0.0.1:9292", transport=httpx.MockTransport(fail)
+    ) as http_client:
+        client = LlamaSwapClient(http_client)
+
+        with pytest.raises(SwapReadTimeout, match="slow load"):
+            await client.load("alpha")
 
 
 @respx.mock
