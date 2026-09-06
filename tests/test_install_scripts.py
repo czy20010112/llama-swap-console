@@ -24,6 +24,15 @@ def test_systemd_user_service_is_local_and_hardened() -> None:
     assert "ProtectSystem=strict" in unit
 
 
+def test_systemd_service_bounds_sse_shutdown_before_systemd_deadline() -> None:
+    unit = (ROOT / "deploy" / "llama-swap-console.service").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--timeout-graceful-shutdown 10" in unit
+    assert "TimeoutStopSec=20" in unit
+
+
 def test_installer_is_idempotent_and_checks_health() -> None:
     script = (ROOT / "scripts" / "install-wsl.sh").read_text(encoding="utf-8")
 

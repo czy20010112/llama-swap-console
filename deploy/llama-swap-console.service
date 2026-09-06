@@ -7,13 +7,13 @@ Type=simple
 Environment="PYTHONUNBUFFERED=1"
 Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/wsl/lib:/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0"
 Environment="LLAMA_SWAP_CONSOLE_CONFIG_PATH=%h/.config/llama-swap/config.yaml"
-Environment="LLAMA_SWAP_CONSOLE_MODEL_ROOTS=[\"/mnt/d/AI/models\"]"
+Environment="LLAMA_SWAP_CONSOLE_MODEL_ROOTS=[\"/mnt/d/AI/models\",\"/home/czy098/models\"]"
 Environment="LLAMA_SWAP_CONSOLE_LLAMA_SWAP_URL=http://127.0.0.1:9292"
 Environment="LLAMA_SWAP_CONSOLE_BACKUP_DIR=%h/.local/state/llama-swap-console/backups"
-ExecStart=%h/.local/share/llama-swap-console/.venv/bin/python -m uvicorn llama_swap_console.app:app --host 127.0.0.1 --port 9293
+ExecStart=%h/.local/share/llama-swap-console/.venv/bin/python -m uvicorn llama_swap_console.app:app --host 127.0.0.1 --port 9293 --timeout-graceful-shutdown 10
 Restart=on-failure
 RestartSec=3
-TimeoutStopSec=15
+TimeoutStopSec=20
 
 NoNewPrivileges=true
 PrivateTmp=true

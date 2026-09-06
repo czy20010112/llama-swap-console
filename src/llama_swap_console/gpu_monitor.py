@@ -214,7 +214,7 @@ def parse_windows_gpu_json(output: str) -> tuple[GpuProcess, ...]:
 
 
 class GpuMonitor:
-    def __init__(self, runner: Runner | None = None, cache_seconds: float = 2) -> None:
+    def __init__(self, runner: Runner | None = None, cache_seconds: float = 10) -> None:
         self._runner = runner or run_command
         self._cache_seconds = cache_seconds
         self._cached: GpuSnapshot | None = None

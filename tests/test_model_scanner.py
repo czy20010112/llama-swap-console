@@ -131,6 +131,27 @@ def test_registered_paths_are_deduplicated_and_candidate_ids_are_stable(tmp_path
     assert all(len(item.candidate_id) == 16 for item in all_candidates)
 
 
+def test_registered_gguf_does_not_read_metadata_again(tmp_path: Path, monkeypatch) -> None:
+    registered = tmp_path / "registered.gguf"
+    unregistered = tmp_path / "unregistered.gguf"
+    write_gguf(registered)
+    write_gguf(unregistered)
+    scanner = ModelScanner((tmp_path,))
+    scanned: list[Path] = []
+    original = scanner._scan_gguf
+
+    def track_metadata_read(path: Path):
+        scanned.append(path)
+        return original(path)
+
+    monkeypatch.setattr(scanner, "_scan_gguf", track_metadata_read)
+
+    candidates = scanner.scan(registered_paths={registered})
+
+    assert [Path(candidate.path).name for candidate in candidates] == ["unregistered.gguf"]
+    assert scanned == [unregistered]
+
+
 def test_scanner_does_not_follow_directory_symlinks(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()

@@ -54,6 +54,7 @@ class SwapProtocol(Protocol):
     async def unload(self, model_id: str) -> Any: ...
     async def unload_all(self) -> Any: ...
     def events(self) -> Any: ...
+    async def decode_speed(self, model_id: str) -> Any: ...
 
 
 class GpuProtocol(Protocol):
@@ -173,9 +174,12 @@ class ModelService:
         }
 
     async def discovered(self) -> dict[str, Any]:
-        if time.monotonic() - self._scan_time > self.scan_ttl:
-            await self.scan()
-        return {"models": [asdict(item) for item in self._discovered.values()]}
+        age = time.monotonic() - self._scan_time if self._scan_time else None
+        return {
+            "models": [asdict(item) for item in self._discovered.values()],
+            "scan_age_seconds": age,
+            "scan_stale": age is not None and age > self.scan_ttl,
+        }
 
     async def register(
         self, candidate_id: str, request: ModelRegisterRequest
@@ -302,6 +306,10 @@ class ModelService:
     async def gpu_snapshot(self) -> dict[str, Any]:
         return asdict(await self.gpu.sample())
 
+    async def decode_speed(self, model_id: str) -> dict[str, Any]:
+        self._require_model(self.store.read(), model_id)
+        return await self.swap.decode_speed(model_id)
+
     async def rollback_latest(self) -> dict[str, Any]:
         restored = self.store.rollback_latest()
         return {"revision": restored.revision, "restored": True}
@@ -368,14 +376,14 @@ class ModelService:
             current = self.codec.decode(command)
         except CommandDecodeError as error:
             raise ServiceValidationError(str(error)) from error
-        immutable = ("backend", "launch_tokens", "model_argument", "port_token", "unknown_tokens")
+        immutable = ("backend", "launch_tokens", "model_argument", "port_token")
         if any(getattr(current, key) != getattr(requested, key) for key in immutable):
             raise ServiceValidationError("Launcher and compatibility arguments are read-only")
 
     def _ensure_trusted_registration_template(
         self, snapshot: ConfigSnapshot, requested: Any
     ) -> None:
-        immutable = ("backend", "launch_tokens", "model_argument", "port_token", "unknown_tokens")
+        immutable = ("backend", "launch_tokens", "model_argument", "port_token")
         for entry in self._models(snapshot).values():
             if not isinstance(entry, CommentedMap) or not isinstance(entry.get("cmd"), str):
                 continue

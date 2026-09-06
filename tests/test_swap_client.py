@@ -148,3 +148,121 @@ async def test_sse_http_error_is_normalized(client: LlamaSwapClient) -> None:
             pass
 
     assert caught.value.status == 503
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_decode_speed_prefers_positive_llama_swap_activity(
+    client: LlamaSwapClient,
+) -> None:
+    respx.get("http://127.0.0.1:9292/api/metrics/activity").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [{"model": "alpha", "tokens": {"tokens_per_second": 73.25}}]},
+        )
+    )
+
+    speed = await client.decode_speed("alpha")
+
+    assert speed == {
+        "tokens_per_second": 73.25,
+        "source": "llama-swap-activity",
+        "scope": "request",
+        "running_requests": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_decode_speed_does_not_reuse_stale_activity_speed() -> None:
+    async def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/metrics/activity":
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"model": "alpha", "tokens": {"tokens_per_second": -1}},
+                        {"model": "alpha", "tokens": {"tokens_per_second": 99}},
+                    ]
+                },
+            )
+        if request.url.path == "/running":
+            return httpx.Response(200, json={"running": [{"model": "alpha", "state": "ready"}]})
+        return httpx.Response(
+            200,
+            text=(
+                'vllm:generation_tokens_total{model_name="alpha"} 100\n'
+                'vllm:num_requests_running{model_name="alpha"} 1\n'
+            ),
+        )
+
+    async with httpx.AsyncClient(
+        base_url="http://127.0.0.1:9292", transport=httpx.MockTransport(respond)
+    ) as http_client:
+        measured = LlamaSwapClient(http_client)
+
+        speed = await measured.decode_speed("alpha")
+
+    assert speed["source"] == "vllm-generation-counter"
+
+
+@pytest.mark.asyncio
+async def test_decode_speed_uses_vllm_generation_counter_delta_when_activity_has_no_speed() -> None:
+    activity = '{"data":[{"model":"alpha","tokens":{"tokens_per_second":-1}}]}'
+    samples = iter(
+        [
+            "vllm:generation_tokens_total{model_name=\"alpha\"} 100\n"
+            "vllm:num_requests_running{model_name=\"alpha\"} 1\n",
+            "vllm:generation_tokens_total{model_name=\"alpha\"} 220\n"
+            "vllm:num_requests_running{model_name=\"alpha\"} 2\n",
+        ]
+    )
+    times = iter([10.0, 12.0])
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/metrics/activity":
+            return httpx.Response(200, text=activity, headers={"content-type": "application/json"})
+        if request.url.path == "/running":
+            return httpx.Response(200, json={"running": [{"model": "alpha", "state": "ready"}]})
+        return httpx.Response(200, text=next(samples))
+
+    async with httpx.AsyncClient(
+        base_url="http://127.0.0.1:9292", transport=httpx.MockTransport(respond)
+    ) as http_client:
+        measured = LlamaSwapClient(http_client, clock=lambda: next(times))
+
+        assert await measured.decode_speed("alpha") == {
+            "tokens_per_second": None,
+            "source": "vllm-generation-counter",
+            "scope": "aggregate",
+            "running_requests": 1,
+        }
+        assert await measured.decode_speed("alpha") == {
+            "tokens_per_second": 60.0,
+            "source": "vllm-generation-counter",
+            "scope": "aggregate",
+            "running_requests": 2,
+        }
+
+
+@pytest.mark.asyncio
+async def test_decode_speed_never_probes_upstream_for_stopped_model() -> None:
+    upstream_hits: list[str] = []
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/upstream/"):
+            upstream_hits.append(request.url.path)
+            return httpx.Response(200, text="vllm:generation_tokens_total 1\n")
+        if request.url.path == "/running":
+            return httpx.Response(200, json={"running": []})
+        return httpx.Response(200, json={"data": []})
+
+    async with httpx.AsyncClient(
+        base_url="http://127.0.0.1:9292", transport=httpx.MockTransport(respond)
+    ) as http_client:
+        measured = LlamaSwapClient(http_client)
+
+        speed = await measured.decode_speed("alpha")
+
+    assert speed["source"] == "not-running"
+    assert speed["tokens_per_second"] is None
+    assert upstream_hits == []

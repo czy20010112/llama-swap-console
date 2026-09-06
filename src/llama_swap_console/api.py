@@ -53,6 +53,11 @@ async def get_model(model_id: str, request: Request):
     return await service(request).get_model(model_id)
 
 
+@router.get("/models/{model_id}/speed")
+async def model_speed(model_id: str, request: Request):
+    return await service(request).decode_speed(model_id)
+
+
 @router.put("/models/{model_id}")
 async def update_model(model_id: str, body: ModelUpdateRequest, request: Request):
     return await service(request).update_model(model_id, body)

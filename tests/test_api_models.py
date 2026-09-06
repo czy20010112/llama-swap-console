@@ -70,6 +70,21 @@ class FakeSwap:
     async def events(self):
         yield "event: log\ndata: hello\n\n"
 
+    async def decode_speed(self, model_id: str):
+        return {
+            "tokens_per_second": 42.5,
+            "source": "vllm-generation-counter",
+            "scope": "aggregate",
+            "running_requests": 1,
+        }
+
+
+class DelayedEventsSwap(FakeSwap):
+    async def events(self):
+        yield "event: log\ndata: first\n\n"
+        await asyncio.sleep(0.02)
+        yield "event: log\ndata: second\n\n"
+
 
 class FakeGpu:
     async def sample(self):
@@ -374,6 +389,49 @@ def console(tmp_path: Path):
     )
     with TestClient(create_app(settings, service=service)) as client:
         yield client, service, swap, model_root
+
+
+def test_event_stream_preserves_an_open_upstream_connection(console) -> None:
+    client, service, _swap, _model_root = console
+    service.swap = DelayedEventsSwap()
+
+    response = client.get("/api/events")
+
+    assert response.status_code == 200
+    assert "data: first" in response.text
+    assert "data: second" in response.text
+
+
+def test_model_speed_endpoint_reports_decode_throughput(console) -> None:
+    client, _service, _swap, _model_root = console
+
+    response = client.get("/api/models/alpha/speed")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "tokens_per_second": 42.5,
+        "source": "vllm-generation-counter",
+        "scope": "aggregate",
+        "running_requests": 1,
+    }
+
+
+def test_discovered_models_get_uses_cached_scan_results(console) -> None:
+    client, service, _swap, model_root = console
+    beta = model_root / "beta.gguf"
+    beta.write_bytes(b"would be discovered by an explicit scan")
+
+    def fail_if_scanned(*args, **kwargs):
+        raise AssertionError("GET /api/discovered-models must not scan model roots")
+
+    service.scanner.scan = fail_if_scanned
+
+    response = client.get("/api/discovered-models")
+
+    assert response.status_code == 200
+    assert response.json()["models"] == []
+    assert response.json()["scan_age_seconds"] is None
+    assert response.json()["scan_stale"] is False
 
 
 def test_lists_and_reads_structured_models(console) -> None:

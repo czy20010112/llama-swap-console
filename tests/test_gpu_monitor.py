@@ -141,3 +141,7 @@ def test_windows_gpu_script_collects_counters_once() -> None:
     from llama_swap_console.gpu_monitor import WINDOWS_GPU_SCRIPT
 
     assert WINDOWS_GPU_SCRIPT.count("Get-Counter") == 1
+
+
+def test_default_gpu_sample_cache_avoids_repeated_windows_process_enumeration() -> None:
+    assert GpuMonitor()._cache_seconds == 10

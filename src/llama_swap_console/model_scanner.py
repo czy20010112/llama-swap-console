@@ -65,8 +65,12 @@ class ModelScanner:
                     self._add(hf_candidate, registered, seen, candidates)
                 for filename in filenames:
                     if filename.lower().endswith(".gguf"):
+                        path = current / filename
+                        normalized = self._normalize(path)
+                        if normalized in registered or normalized in seen:
+                            continue
                         self._add(
-                            self._scan_gguf(current / filename),
+                            self._scan_gguf(path),
                             registered,
                             seen,
                             candidates,
