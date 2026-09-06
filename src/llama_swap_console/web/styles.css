@@ -8,3 +8,27 @@
 .gpu-selector{width:100%;height:31px;margin-top:10px;padding:0 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:11px}
 .speed-summary{display:grid;grid-template-columns:1fr auto;gap:3px 10px;margin-top:10px;padding:9px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface)}.speed-summary span,.speed-summary small{color:var(--muted);font-size:10px}.speed-summary strong{font-variant-numeric:tabular-nums;font-size:13px}.speed-summary small{grid-column:1/-1}
 [hidden]{display:none!important}
+
+/* ==== Precision Lab theme layer — 与模型测评台同一设计语言 ==== */
+:root{--bg:#f6f1e7;--surface:#fbf8f1;--surface-subtle:#f1ead9;--text:#22272b;--muted:#5a6470;--faint:#8a94a0;--border:#ddd5c5;--border-strong:#c6bca6;--accent:#0f5e5a;--ok:#3e7d4f;--warn:#9a6b15;--error:#b3372b;--font-display:"Noto Serif SC","Source Han Serif SC","SimSun",Georgia,"Times New Roman",serif}
+body{font-family:"Noto Sans SC","Source Han Sans SC","Microsoft YaHei UI","Segoe UI Variable","Segoe UI",sans-serif}
+.brand strong,.column-header h1,.detail-title h2,.dialog-header h2,.empty-stage h2{font-family:var(--font-display)}
+.brand strong{font-size:16px;letter-spacing:.02em}
+.brand-mark{background:var(--accent)}
+.button.primary{background:var(--accent);border-color:var(--accent)}
+.button.primary:hover{filter:brightness(1.12)}
+.meter i{background:var(--accent)}
+.log-view{background:#173038;color:#dbe9e5}
+.model-row.active{border-color:var(--accent);box-shadow:inset 2px 0 0 var(--accent)}
+@media(prefers-reduced-motion:no-preference){
+button,.model-row,.icon-button,.language-button,.gpu-selector{transition:background .12s ease-out,border-color .12s ease-out,transform .12s ease-out,filter .12s ease-out}
+.button:active,.icon-button:active,.language-button:active{transform:scale(.96)}
+.model-row:hover{transform:translateX(2px)}
+.meter i{transition:width .45s cubic-bezier(.16,1,.3,1)}
+dialog[open]{animation:dialog-in .2s cubic-bezier(.16,1,.3,1)}
+@keyframes dialog-in{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
+@keyframes soft-pulse{0%,100%{opacity:1}50%{opacity:.55}}
+.mini-status.running{animation:soft-pulse 2.4s ease-in-out infinite}
+.topbar-status.online .status-dot{animation:soft-pulse 2.4s ease-in-out infinite}
+}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
