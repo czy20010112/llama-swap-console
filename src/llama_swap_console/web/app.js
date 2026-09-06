@@ -21,7 +21,7 @@ const locales = {
     incomplete: "下载未完成", metadataUnreadable: "元数据不可读", ready: "可登记",
     size: "大小", quantization: "量化", architecture: "架构", mtp: "MTP",
     enabled: "已启用", disabled: "未启用", operationFailed: "操作失败",
-    requiredIdentity: "模型 ID 和显示名称不能为空", invalidContext: "上下文长度必须在 512 到 262144 之间",
+    requiredIdentity: "模型 ID 和显示名称不能为空", invalidContext: "上下文长度必须在 512 到 1048576 之间",
     gpuLayers: "GPU 层数", flashAttention: "Flash Attention", kvCacheK: "KV 缓存 K",
     kvCacheV: "KV 缓存 V", jinja: "Jinja 模板", mmproj: "视觉投影文件",
     draftModel: "草稿模型", specType: "推测类型", draftMax: "最大草稿 Token",
@@ -30,7 +30,8 @@ const locales = {
     dtype: "计算精度", maxSequences: "最大并发序列", maxBatchedTokens: "最大批处理 Token",
     chunkedPrefill: "分块预填充", trustRemoteCode: "信任远程代码", reasoningParser: "推理解析器",
     toolParser: "工具调用解析器", autoToolChoice: "自动工具选择", loadStrategy: "权重加载策略",
-    mtpMethod: "推测方法", mtpModel: "推测模型", mtpTokens: "推测 Token 数", yes: "是", no: "否"
+    mtpMethod: "推测方法", mtpModel: "推测模型", mtpTokens: "推测 Token 数", yes: "是", no: "否",
+    decodeSpeed: "纯生成速度", aggregateSpeed: "总吞吐", requestSpeed: "单请求"
   },
   en: {
     connecting: "Connecting", connected: "Connected", offline: "Service unavailable", models: "Models",
@@ -54,7 +55,7 @@ const locales = {
     size: "Size", quantization: "Quantization", architecture: "Architecture", mtp: "MTP",
     enabled: "Enabled", disabled: "Disabled", operationFailed: "Operation failed",
     requiredIdentity: "Model ID and display name are required",
-    invalidContext: "Context length must be between 512 and 262144",
+    invalidContext: "Context length must be between 512 and 1048576",
     gpuLayers: "GPU layers", flashAttention: "Flash attention", kvCacheK: "KV cache K",
     kvCacheV: "KV cache V", jinja: "Jinja template", mmproj: "Vision projector",
     draftModel: "Draft model", specType: "Speculative type", draftMax: "Maximum draft tokens",
@@ -64,7 +65,7 @@ const locales = {
     chunkedPrefill: "Chunked prefill", trustRemoteCode: "Trust remote code", reasoningParser: "Reasoning parser",
     toolParser: "Tool-call parser", autoToolChoice: "Automatic tool choice", loadStrategy: "Weight load strategy",
     mtpMethod: "Speculative method", mtpModel: "Speculative model", mtpTokens: "Speculative tokens",
-    yes: "Yes", no: "No"
+    yes: "Yes", no: "No", decodeSpeed: "Decode speed", aggregateSpeed: "aggregate", requestSpeed: "per request"
   }
 };
 
@@ -72,10 +73,15 @@ const state = {
   locale: localStorage.getItem("llamaSwapConsole.locale") || "zh-CN",
   models: [], discovered: [], selectedId: null, currentModel: null, editingCandidate: null,
   query: "", processQuery: "", gpu: null, gpuAdapter: null, operationBusy: false, logSource: null,
-  logRetry: 0, logTimer: null, operationPollTimer: null
+  logRetry: 0, logTimer: null, logFlushTimer: null, logPending: [], logLines: [], operationPollTimer: null
 };
 const OPERATION_STATUS_POLL_MS = 1000;
 const OPERATION_STATUS_MAX_POLLS = 30;
+const GPU_REFRESH_MS = 15_000;
+const SPEED_REFRESH_MS = 2_000;
+const MAX_LOG_LINES = 2_000;
+const MAX_LOG_CHARS = 120_000;
+const MAX_LOG_EVENT_CHARS = 12_000;
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const t = key => locales[state.locale][key] || key;
@@ -398,18 +404,91 @@ async function loadGpu() {
   }
 }
 
+async function loadDecodeSpeed() {
+  const model = state.models.find(item => item.id === state.selectedId && isActiveStatus(item.status))
+    || state.models.find(item => isActiveStatus(item.status));
+  if (!model) {
+    $("#decode-speed").textContent = "—";
+    $("#decode-speed-scope").textContent = "";
+    return;
+  }
+  try {
+    const sample = await api(`/api/models/${encodeURIComponent(model.id)}/speed`);
+    if (sample.source === "not-running") {
+      $("#decode-speed").textContent = "未运行";
+      $("#decode-speed-scope").textContent = "";
+      return;
+    }
+    $("#decode-speed").textContent = Number.isFinite(sample.tokens_per_second)
+      ? `${sample.tokens_per_second.toFixed(1)} tok/s` : "采样中…";
+    const scope = sample.scope === "request" ? t("requestSpeed") : t("aggregateSpeed");
+    const concurrency = sample.running_requests > 1 ? ` · ${sample.running_requests} requests` : "";
+    $("#decode-speed-scope").textContent = `${scope}${concurrency}`;
+  } catch {
+    $("#decode-speed").textContent = "—";
+    $("#decode-speed-scope").textContent = "";
+  }
+}
+
 function showMobilePanel(name) {
   if (innerWidth > 980) return;
   $$('[data-panel]').forEach(element => element.classList.toggle("mobile-active", element.dataset.panel === name));
   $$('[data-mobile-panel]').forEach(element => element.classList.toggle("active", element.dataset.mobilePanel === name));
 }
 
+function trimText(value, limit = MAX_LOG_EVENT_CHARS) {
+  if (typeof value !== "string") value = String(value ?? "");
+  if (value.length <= limit) return value;
+  return `… [truncated ${value.length - limit} chars]\n${value.slice(-limit)}`;
+}
+
+function parseJsonMaybe(value) {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function eventText(event) {
+  const outer = parseJsonMaybe(event.data ?? "");
+  if (outer && typeof outer === "object") {
+    const nested = parseJsonMaybe(outer.data);
+    if (nested && typeof nested === "object" && typeof nested.data === "string") {
+      return trimText(nested.data);
+    }
+    if (typeof nested === "string") return trimText(nested);
+    if (typeof outer.data === "string") return trimText(outer.data);
+    return trimText(JSON.stringify(outer));
+  }
+  return trimText(outer);
+}
+
+function scheduleLogFlush() {
+  if (state.logFlushTimer) return;
+  state.logFlushTimer = setTimeout(() => {
+    state.logFlushTimer = null;
+    const view = $("#live-logs");
+    const stickToBottom = view.scrollHeight - view.scrollTop - view.clientHeight < 24;
+    if (state.logPending.length) {
+      state.logLines.push(...state.logPending.splice(0));
+      if (state.logLines.length > MAX_LOG_LINES) state.logLines = state.logLines.slice(-MAX_LOG_LINES);
+      let total = state.logLines.reduce((sum, line) => sum + line.length + 1, 0);
+      while (state.logLines.length > 1 && total > MAX_LOG_CHARS) {
+        total -= state.logLines.shift().length + 1;
+      }
+      view.textContent = state.logLines.join("\n");
+    }
+    if (stickToBottom) view.scrollTop = view.scrollHeight;
+  }, 50);
+}
+
 function appendLog(event) {
-  const view = $("#live-logs");
-  const stickToBottom = view.scrollHeight - view.scrollTop - view.clientHeight < 24;
-  const lines = `${view.textContent}${event.data}\n`.split("\n");
-  view.textContent = lines.slice(-2000).join("\n");
-  if (stickToBottom) view.scrollTop = view.scrollHeight;
+  const text = eventText(event);
+  if (!text) return;
+  state.logPending.push(...text.split("\n"));
+  scheduleLogFlush();
 }
 
 function connectLogs() {
@@ -557,7 +636,8 @@ function editorFields(settings, model, candidate, meta = null) {
     field(t("mtpModel"), "vllm.speculative.model", settings.vllm?.speculative?.model, {full: true}),
     field(t("mtpTokens"), "vllm.speculative.num_speculative_tokens", settings.vllm?.speculative?.num_speculative_tokens, {type: "number"})
   ];
-  return [group(t("basicSettings"), identity), group(t("memoryContext"), memory), group(t("acceleration"), specific)];
+  const compat = [field(t("compatibilityArgs"), "unknown_tokens", (settings.unknown_tokens || []).join(" "), {full: true})];
+  return [group(t("basicSettings"), identity), group(t("memoryContext"), memory), group(t("acceleration"), specific), group(t("compatibilityArgs"), compat)];
 }
 
 function openEditor(model = null, candidate = null, draft = null) {
@@ -591,6 +671,8 @@ function editorPayload() {
     if (path.startsWith("meta.")) setDeep(meta, path.slice(5), value);
     else setDeep(settings, path, value);
   }
+  const unknownField = container.querySelector('[data-path="unknown_tokens"]');
+  if (unknownField) settings.unknown_tokens = unknownField.value.trim() ? unknownField.value.trim().split(/\s+/).filter(Boolean) : [];
   if (settings.vllm?.speculative && !settings.vllm.speculative.method) settings.vllm.speculative = null;
   return {meta, settings};
 }
@@ -601,7 +683,7 @@ async function saveEditor(reload) {
   try {
     const {meta, settings} = editorPayload();
     if (!meta.id || !meta.name) throw new Error(t("requiredIdentity"));
-    if (!Number.isInteger(settings.context_length) || settings.context_length < 512 || settings.context_length > 262144) {
+    if (!Number.isInteger(settings.context_length) || settings.context_length < 512 || settings.context_length > 1048576) {
       throw new Error(t("invalidContext"));
     }
     saveButtons.forEach(button => { button.disabled = true; });
@@ -704,4 +786,6 @@ loadModels();
 loadDiscovered();
 loadGpu();
 connectLogs();
-setInterval(() => { if (!document.hidden) loadGpu(); }, 2000);
+setInterval(() => { if (!document.hidden) loadGpu(); }, GPU_REFRESH_MS);
+setInterval(() => { if (!document.hidden) loadDecodeSpeed(); }, SPEED_REFRESH_MS);
+loadDecodeSpeed();

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import quote
@@ -26,8 +28,10 @@ class SwapResponseError(Exception):
 
 
 class LlamaSwapClient:
-    def __init__(self, client: httpx.AsyncClient) -> None:
+    def __init__(self, client: httpx.AsyncClient, *, clock=time.monotonic) -> None:
         self._client = client
+        self._clock = clock
+        self._decode_samples: dict[str, tuple[float, float]] = {}
         self._request_timeout = httpx.Timeout(3.0)
         self._event_timeout = httpx.Timeout(
             connect=3.0, read=None, write=3.0, pool=3.0
@@ -38,6 +42,46 @@ class LlamaSwapClient:
 
     async def running(self) -> Any:
         return await self._request("GET", "/running")
+
+    async def decode_speed(self, model_id: str) -> dict[str, Any]:
+        activity = await self._request("GET", "/api/metrics/activity")
+        latest = next(
+            (item for item in activity.get("data", []) if item.get("model") == model_id),
+            None,
+        )
+        if latest is not None:
+            value = latest.get("tokens", {}).get("tokens_per_second")
+            if isinstance(value, (int, float)) and value > 0:
+                return {"tokens_per_second": float(value), "source": "llama-swap-activity", "scope": "request", "running_requests": None}
+        # Never probe /upstream/* for a stopped model: that path proxies through
+        # llama-swap, which starts the model on demand — a 2s stats poll would
+        # keep waking models the user unloaded. Ask /running (live truth) first.
+        try:
+            live = await self.running()
+            names = {item.get("model") for item in live.get("running", [])}
+            if model_id not in names:
+                return {"tokens_per_second": None, "source": "not-running", "scope": "aggregate", "running_requests": 0}
+        except (SwapUnavailable, SwapResponseError):
+            return {"tokens_per_second": None, "source": "swap-unreachable", "scope": "aggregate", "running_requests": None}
+        encoded = quote(model_id, safe="")
+        metrics = await self._request("GET", f"/upstream/{encoded}/metrics")
+        total = self._metric(metrics, "vllm:generation_tokens_total", model_id)
+        running = self._metric(metrics, "vllm:num_requests_running", model_id)
+        now = self._clock()
+        previous = self._decode_samples.get(model_id)
+        self._decode_samples[model_id] = (now, total)
+        speed = None
+        if previous is not None and now > previous[0] and total >= previous[1]:
+            speed = (total - previous[1]) / (now - previous[0])
+        return {"tokens_per_second": speed, "source": "vllm-generation-counter", "scope": "aggregate", "running_requests": int(running)}
+
+    @staticmethod
+    def _metric(metrics: str, name: str, model_id: str) -> float:
+        pattern = re.compile(rf'^{re.escape(name)}\{{[^}}]*model_name="{re.escape(model_id)}"[^}}]*\}}\s+([-+0-9.eE]+)$', re.MULTILINE)
+        match = pattern.search(metrics)
+        if match is None:
+            raise SwapUnavailable(f"vLLM metric {name!r} is unavailable for {model_id!r}")
+        return float(match.group(1))
 
     async def load(self, model_id: str) -> Any:
         encoded = quote(model_id, safe="")
