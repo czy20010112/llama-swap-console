@@ -368,3 +368,139 @@ async def test_auth_rejection_is_not_treated_as_availability(
     )
 
     assert await client.is_available() is False
+
+
+def _speed_transport(samples, activity: str):
+    """Build a MockTransport that feeds /upstream metrics from `samples`."""
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/metrics/activity":
+            return httpx.Response(200, text=activity, headers={"content-type": "application/json"})
+        if request.url.path == "/running":
+            return httpx.Response(200, json={"running": [{"model": "alpha", "state": "ready"}]})
+        return httpx.Response(200, text=next(samples))
+
+    return respond
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_decode_speed_sums_sglang_counters_split_by_streaming() -> None:
+    """sglang emits one generation_tokens_total series per is_streaming value.
+
+    Only the streaming series moves for anyone chatting over /v1/chat/completions, so
+    matching the leftmost line pins the counter to a frozen series, the delta stays 0
+    and the panel shows "0.0 tok/s 总吞吐" forever.
+    """
+
+    samples = iter(
+        [
+            'sglang:generation_tokens_total{engine_type="unified",is_streaming="false",model_name="alpha"} 8.0\n'
+            'sglang:generation_tokens_total{engine_type="unified",is_streaming="true",model_name="alpha"} 2212.0\n'
+            'sglang:num_running_reqs{engine_type="unified",model_name="alpha",tp_rank="0"} 1.0\n',
+            'sglang:generation_tokens_total{engine_type="unified",is_streaming="false",model_name="alpha"} 8.0\n'
+            'sglang:generation_tokens_total{engine_type="unified",is_streaming="true",model_name="alpha"} 2312.0\n'
+            'sglang:num_running_reqs{engine_type="unified",model_name="alpha",tp_rank="0"} 1.0\n',
+        ]
+    )
+    times = iter([10.0, 12.0])
+
+    async with httpx.AsyncClient(
+        base_url="http://127.0.0.1:9292",
+        transport=httpx.MockTransport(_speed_transport(samples, '{"data":[]}')),
+    ) as http_client:
+        measured = LlamaSwapClient(http_client, clock=lambda: next(times))
+
+        assert await measured.decode_speed("alpha") == {
+            "tokens_per_second": None,
+            "source": "sglang-generation-counter",
+            "scope": "aggregate",
+            "running_requests": 1,
+        }
+        # (8 + 2312) - (8 + 2212) = 100 tokens over 2s
+        assert await measured.decode_speed("alpha") == {
+            "tokens_per_second": 50.0,
+            "source": "sglang-generation-counter",
+            "scope": "aggregate",
+            "running_requests": 1,
+        }
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_decode_speed_uses_the_live_throughput_gauge_on_the_first_poll() -> None:
+    """sglang exposes gen_throughput as a token/s gauge; it needs no sampling window."""
+
+    samples = iter(
+        [
+            'sglang:generation_tokens_total{engine_type="unified",is_streaming="true",model_name="alpha"} 2212.0\n'
+            'sglang:num_running_reqs{engine_type="unified",model_name="alpha",tp_rank="0"} 1.0\n'
+            'sglang:gen_throughput{engine_type="unified",model_name="alpha",tp_rank="0"} 32.5\n',
+        ]
+    )
+
+    async with httpx.AsyncClient(
+        base_url="http://127.0.0.1:9292",
+        transport=httpx.MockTransport(_speed_transport(samples, '{"data":[]}')),
+    ) as http_client:
+        measured = LlamaSwapClient(http_client)
+
+        assert await measured.decode_speed("alpha") == {
+            "tokens_per_second": 32.5,
+            "source": "sglang-generation-counter-throughput",
+            "scope": "model",
+            "running_requests": 1,
+        }
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_decode_speed_says_idle_rather_than_reporting_a_hard_zero() -> None:
+    """Nothing in flight must not be presented as a measurement of 0 tok/s."""
+
+    samples = iter(
+        [
+            'sglang:generation_tokens_total{engine_type="unified",is_streaming="true",model_name="alpha"} 2212.0\n'
+            'sglang:num_running_reqs{engine_type="unified",model_name="alpha",tp_rank="0"} 0.0\n'
+            'sglang:gen_throughput{engine_type="unified",model_name="alpha",tp_rank="0"} 0.0\n',
+        ]
+    )
+
+    async with httpx.AsyncClient(
+        base_url="http://127.0.0.1:9292",
+        transport=httpx.MockTransport(_speed_transport(samples, '{"data":[]}')),
+    ) as http_client:
+        measured = LlamaSwapClient(http_client)
+
+        assert await measured.decode_speed("alpha") == {
+            "tokens_per_second": None,
+            "source": "idle",
+            "scope": "model",
+            "running_requests": 0,
+        }
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_counter_only_backend_reports_idle_when_nothing_is_running() -> None:
+    """vLLM has no throughput gauge, so the idle gate falls back to the running count."""
+
+    samples = iter(
+        [
+            'vllm:generation_tokens_total{model_name="alpha"} 100\n'
+            'vllm:num_requests_running{model_name="alpha"} 0\n',
+        ]
+    )
+
+    async with httpx.AsyncClient(
+        base_url="http://127.0.0.1:9292",
+        transport=httpx.MockTransport(_speed_transport(samples, '{"data":[]}')),
+    ) as http_client:
+        measured = LlamaSwapClient(http_client)
+
+        assert await measured.decode_speed("alpha") == {
+            "tokens_per_second": None,
+            "source": "idle",
+            "scope": "model",
+            "running_requests": 0,
+        }

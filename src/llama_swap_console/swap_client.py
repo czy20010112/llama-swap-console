@@ -4,7 +4,7 @@ import json
 import re
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.parse import quote
 
 import httpx
@@ -38,6 +38,15 @@ class SwapUnauthorized(SwapResponseError):
 
 
 _AUTH_REJECTED = {401, 403}
+
+
+class _MetricReading(NamedTuple):
+    """One scrape of a backend's Prometheus text, reduced to what we display."""
+
+    total: float           # cumulative generation tokens; counters are summed
+    running: float         # live request count; parallel ranks repeat the same value
+    throughput: float | None  # direct token/s gauge, when the backend exposes one
+    source: str
 
 
 class LlamaSwapClient:
@@ -78,46 +87,94 @@ class LlamaSwapClient:
             return {"tokens_per_second": None, "source": "swap-unreachable", "scope": "aggregate", "running_requests": None}
         encoded = quote(model_id, safe="")
         metrics = await self._request("GET", f"/upstream/{encoded}/metrics")
-        total, running, source = self._decode_metrics(metrics, model_id)
+        reading = self._decode_metrics(metrics, model_id)
         now = self._clock()
         previous = self._decode_samples.get(model_id)
-        self._decode_samples[model_id] = (now, total)
+        self._decode_samples[model_id] = (now, reading.total)
+        running = int(reading.running)
+
+        # A live throughput gauge needs no sampling window, so the first poll after a
+        # page load is already correct. This is the path sglang takes.
+        if reading.throughput is not None:
+            decoding = reading.throughput > 0
+            return {
+                "tokens_per_second": reading.throughput if decoding else None,
+                "source": f"{reading.source}-throughput" if decoding else "idle",
+                "scope": "model",
+                "running_requests": running,
+            }
+
+        # Counter-only backends (vLLM) need two scrapes. With nothing in flight the
+        # counter cannot move, and reporting that as a hard 0.0 is indistinguishable
+        # from a stuck reading — say "idle" instead of inventing a measurement.
+        if running <= 0:
+            return {
+                "tokens_per_second": None,
+                "source": "idle",
+                "scope": "model",
+                "running_requests": 0,
+            }
+
         speed = None
-        if previous is not None and now > previous[0] and total >= previous[1]:
-            speed = (total - previous[1]) / (now - previous[0])
-        return {"tokens_per_second": speed, "source": source, "scope": "aggregate", "running_requests": int(running)}
+        if previous is not None and now > previous[0] and reading.total > previous[1]:
+            speed = (reading.total - previous[1]) / (now - previous[0])
+        return {"tokens_per_second": speed, "source": reading.source, "scope": "aggregate", "running_requests": running}
 
     @classmethod
-    def _decode_metrics(cls, metrics: str, model_id: str) -> tuple[float, float, str]:
-        for total_name, running_name, source in (
+    def _decode_metrics(cls, metrics: str, model_id: str) -> _MetricReading:
+        for counter, running, gauge, source in (
             (
                 "vllm:generation_tokens_total",
                 "vllm:num_requests_running",
+                None,
                 "vllm-generation-counter",
             ),
             (
                 "sglang:generation_tokens_total",
                 "sglang:num_running_reqs",
+                "sglang:gen_throughput",
                 "sglang-generation-counter",
             ),
         ):
-            try:
-                return (
-                    cls._metric(metrics, total_name, model_id),
-                    cls._metric(metrics, running_name, model_id),
-                    source,
-                )
-            except SwapUnavailable:
+            total = cls._metric_sum(metrics, counter, model_id)
+            live = cls._metric_max(metrics, running, model_id)
+            if total is None or live is None:
                 continue
+            return _MetricReading(
+                total=total,
+                running=live,
+                throughput=None if gauge is None else cls._metric_max(metrics, gauge, model_id),
+                source=source,
+            )
         raise SwapUnavailable(f"No supported generation metrics are available for {model_id!r}")
 
+    @classmethod
+    def _metric_sum(cls, metrics: str, name: str, model_id: str) -> float | None:
+        """Sum a counter, which backends may split across label variants.
+
+        sglang emits one `generation_tokens_total` series per `is_streaming` value;
+        reading only the first line pins us to the non-streaming series, which never
+        moves while the user chats through /v1/chat/completions.
+        """
+
+        values = cls._metric_values(metrics, name, model_id)
+        return sum(values) if values else None
+
+    @classmethod
+    def _metric_max(cls, metrics: str, name: str, model_id: str) -> float | None:
+        """Take the max of a gauge: every rank repeats the same value, so summing lies."""
+
+        values = cls._metric_values(metrics, name, model_id)
+        return max(values) if values else None
+
     @staticmethod
-    def _metric(metrics: str, name: str, model_id: str) -> float:
-        pattern = re.compile(rf'^{re.escape(name)}\{{[^}}]*model_name="{re.escape(model_id)}"[^}}]*\}}\s+([-+0-9.eE]+)$', re.MULTILINE)
-        match = pattern.search(metrics)
-        if match is None:
-            raise SwapUnavailable(f"Metric {name!r} is unavailable for {model_id!r}")
-        return float(match.group(1))
+    def _metric_values(metrics: str, name: str, model_id: str) -> list[float]:
+        pattern = re.compile(
+            rf'^{re.escape(name)}\{{[^}}]*model_name="{re.escape(model_id)}"[^}}]*\}}'
+            r"[ \t]+([-+0-9.eE]+)\r?$",
+            re.MULTILINE,
+        )
+        return [float(value) for value in pattern.findall(metrics)]
 
     async def load(self, model_id: str) -> Any:
         encoded = quote(model_id, safe="")

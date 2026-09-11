@@ -6,7 +6,7 @@ const locales = {
     unauthorized: "凭据被拒",
     unauthorizedHint: "llama-swap 拒绝了访问凭据，请检查环境变量 LLAMA_SWAP_CONSOLE_LLAMA_SWAP_API_KEY",
     models: "模型",
-    notRunning: "未运行", sampling: "采样中…",
+    notRunning: "未运行", idle: "空闲", sampling: "采样中…",
     details: "详情", operations: "状态", library: "本地推理", running: "正在运行",
     allModels: "全部模型", discovered: "待登记模型", noneRunning: "暂无运行模型",
     searchModels: "搜索模型、路径或 ID", searchProcesses: "进程、服务或 PID",
@@ -39,14 +39,14 @@ const locales = {
     mambaSsmDtype: "Mamba 状态精度", speculativeAlgorithm: "推测算法", speculativeDraftModel: "推测草稿模型",
     speculativeSteps: "推测步数", speculativeTopK: "推测 Top-K", speculativeDraftTokens: "推测草稿 Token", enableMetrics: "启用指标",
     yes: "是", no: "否",
-    decodeSpeed: "纯生成速度", aggregateSpeed: "总吞吐", requestSpeed: "单请求"
+    decodeSpeed: "纯生成速度", aggregateSpeed: "总吞吐", requestSpeed: "单请求", modelSpeed: "本模型"
   },
   en: {
     connecting: "Connecting", connected: "Connected", offline: "Service unavailable",
     unauthorized: "Credential rejected",
     unauthorizedHint: "llama-swap rejected the credential — check the LLAMA_SWAP_CONSOLE_LLAMA_SWAP_API_KEY environment variable",
     models: "Models",
-    notRunning: "Not running", sampling: "Sampling…",
+    notRunning: "Not running", idle: "Idle", sampling: "Sampling…",
     details: "Details", operations: "Status", library: "Local inference", running: "Running",
     allModels: "All models", discovered: "Unregistered", noneRunning: "No running models",
     searchModels: "Search model, path, or ID", searchProcesses: "Process, service, or PID",
@@ -81,7 +81,7 @@ const locales = {
     chunkedPrefillSize: "Chunked prefill tokens", mambaSsmDtype: "Mamba state dtype", speculativeAlgorithm: "Speculative algorithm",
     speculativeDraftModel: "Speculative draft model", speculativeSteps: "Speculative steps", speculativeTopK: "Speculative Top-K",
     speculativeDraftTokens: "Speculative draft tokens", enableMetrics: "Enable metrics",
-    yes: "Yes", no: "No", decodeSpeed: "Decode speed", aggregateSpeed: "aggregate", requestSpeed: "per request"
+    yes: "Yes", no: "No", decodeSpeed: "Decode speed", aggregateSpeed: "aggregate", requestSpeed: "per request", modelSpeed: "this model"
   }
 };
 
@@ -520,14 +520,15 @@ async function loadDecodeSpeed() {
   }
   try {
     const sample = await api(`/api/models/${encodeURIComponent(model.id)}/speed`);
-    if (sample.source === "not-running") {
-      $("#decode-speed").textContent = t("notRunning");
+    // 未运行 / 空闲 都是"没有数字可报"，但原因不同，糊成 0.0 tok/s 会被读成读数坏了。
+    if (sample.source === "not-running" || sample.source === "idle") {
+      $("#decode-speed").textContent = t(sample.source === "idle" ? "idle" : "notRunning");
       $("#decode-speed-scope").textContent = "";
       return;
     }
     $("#decode-speed").textContent = Number.isFinite(sample.tokens_per_second)
       ? `${sample.tokens_per_second.toFixed(1)} tok/s` : t("sampling");
-    const scope = sample.scope === "request" ? t("requestSpeed") : t("aggregateSpeed");
+    const scope = {request: t("requestSpeed"), model: t("modelSpeed")}[sample.scope] || t("aggregateSpeed");
     const concurrency = sample.running_requests > 1 ? ` · ${sample.running_requests} requests` : "";
     $("#decode-speed-scope").textContent = `${scope}${concurrency}`;
   } catch {
