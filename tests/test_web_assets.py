@@ -55,6 +55,44 @@ def test_javascript_contains_complete_locale_roots() -> None:
     assert "localStorage" in script
 
 
+def test_javascript_exposes_sglang_editor_fields() -> None:
+    script = (
+        Path(__file__).parents[1]
+        / "src"
+        / "llama_swap_console"
+        / "web"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert '["sglang", "SGLang"]' in script
+    assert '"sglang.tp_size"' in script
+    assert '"sglang.max_running_requests"' in script
+    assert '"sglang.kv_cache_dtype"' in script
+
+
+def test_connection_status_labels_are_localized_in_both_roots() -> None:
+    script = (
+        Path(__file__).parents[1]
+        / "src"
+        / "llama_swap_console"
+        / "web"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    # 连接状态有三种而非两种：在线 / 服务不可用 / 凭据被拒。
+    # 每一句文案都必须在中文与英文两个 locale 根里都存在。
+    for key in ("connected", "offline", "unauthorized", "unauthorizedHint"):
+        assert script.count(f'{key}: "') >= 2, f"{key} must be defined in both locales"
+
+    # 状态名（online / offline / unauthorized）不是 i18n 键——必须显式映射。
+    # 直接把状态名丢给 t() 会把原始 key 显示给用户，这真的发生过一次。
+    assert '{online: "connected", unauthorized: "unauthorized", offline: "offline"}' in script
+    assert "t(status)" not in script
+
+    # 后端用独立字段区分"凭据被拒"和"服务不可用"，前端必须消费它
+    assert "data.llama_swap_unauthorized" in script
+
+
 def test_javascript_has_bounded_starting_state_polling() -> None:
     script = (
         Path(__file__).parents[1]

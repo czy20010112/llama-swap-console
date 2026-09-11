@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     config_path: Path = Path("~/.config/llama-swap/config.yaml").expanduser()
     model_roots: tuple[Path, ...] = (Path("/mnt/d/AI/models"),)
     llama_swap_url: str = "http://127.0.0.1:9292"
+    # Bearer token for llama-swap when it runs behind API-key auth.
+    # Keep it in the environment, never in version control.
+    llama_swap_api_key: str = ""
     listen_host: str = "127.0.0.1"
     listen_port: int = 9293
     backup_dir: Path = Path("~/.local/state/llama-swap-console/backups").expanduser()

@@ -221,6 +221,29 @@ class OfflineLoadSwap(StartingSwap):
         raise SwapUnavailable("connection refused")
 
 
+class RejectedCredentialLoadSwap(StartingSwap):
+    """llama-swap is up but refuses our bearer token."""
+
+    async def load(self, model_id: str):
+        from llama_swap_console.swap_client import SwapUnauthorized
+
+        raise SwapUnauthorized(401, "invalid api key")
+
+
+class RejectedCredentialSwap(FakeSwap):
+    async def models(self):
+        from llama_swap_console.swap_client import SwapUnauthorized
+
+        raise SwapUnauthorized(401, "invalid api key")
+
+
+class UnreachableModelsSwap(FakeSwap):
+    async def models(self):
+        from llama_swap_console.swap_client import SwapUnavailable
+
+        raise SwapUnavailable("connection refused")
+
+
 class BlockingLifecycleSwap(StartingSwap):
     def __init__(self) -> None:
         super().__init__()
@@ -448,6 +471,72 @@ def test_lists_and_reads_structured_models(console) -> None:
     assert detail.json()["settings"]["backend"] == "llama_cpp"
     assert detail.json()["settings"]["context_length"] == 4096
     assert len(detail.json()["revision"]) == 64
+
+
+def test_model_list_flags_a_rejected_credential_separately_from_an_outage(console) -> None:
+    client, service, _, _ = console
+    service.swap = RejectedCredentialSwap()
+
+    listing = client.get("/api/models")
+
+    assert listing.status_code == 200
+    body = listing.json()
+    # 页面靠这个字段把"key 配错了"和"服务挂了"分开提示
+    assert body["llama_swap_available"] is False
+    assert body["llama_swap_unauthorized"] is True
+    assert {item["status"] for item in body["models"]} == {"unavailable"}
+
+
+def test_model_list_does_not_mistake_an_outage_for_a_rejected_credential(console) -> None:
+    client, service, _, _ = console
+    service.swap = UnreachableModelsSwap()
+
+    body = client.get("/api/models").json()
+
+    assert body["llama_swap_available"] is False
+    assert body["llama_swap_unauthorized"] is False
+
+
+@pytest.mark.asyncio
+async def test_model_list_flags_a_real_401_from_llama_swap(console) -> None:
+    _, service, _, _ = console
+
+    async def upstream(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": "invalid api key"})
+
+    async with httpx.AsyncClient(
+        base_url="http://127.0.0.1:9292", transport=httpx.MockTransport(upstream)
+    ) as upstream_client:
+        service.swap = LlamaSwapClient(upstream_client)
+        result = await asyncio.wait_for(service.list_models(), timeout=1)
+
+    assert result["llama_swap_available"] is False
+    assert result["llama_swap_unauthorized"] is True
+
+
+def test_console_builds_a_bearer_header_only_when_a_key_is_configured() -> None:
+    from llama_swap_console.app import _auth_headers
+
+    assert _auth_headers("") == {}
+    assert _auth_headers("sk-test-only") == {"Authorization": "Bearer sk-test-only"}
+
+
+@pytest.mark.asyncio
+async def test_upstream_401_on_write_reports_rejected_credential_not_a_generic_502(
+    console,
+) -> None:
+    client, service, _, _ = console
+    service.swap = RejectedCredentialLoadSwap()
+
+    transport = httpx.ASGITransport(app=client.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as api:
+        response = await asyncio.wait_for(
+            api.post("/api/models/alpha/load"), timeout=1
+        )
+
+    assert response.status_code == 503
+    assert "LLAMA_SWAP_CONSOLE_LLAMA_SWAP_API_KEY" in response.json()["detail"]
+    assert response.json()["upstream_status"] == 401
 
 
 def test_structured_update_preserves_unknown_yaml_fields(console) -> None:

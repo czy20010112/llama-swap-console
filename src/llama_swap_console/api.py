@@ -13,7 +13,11 @@ from llama_swap_console.model_service import (
     ServiceValidationError,
 )
 from llama_swap_console.schemas import ModelRegisterRequest, ModelUpdateRequest
-from llama_swap_console.swap_client import SwapResponseError, SwapUnavailable
+from llama_swap_console.swap_client import (
+    SwapResponseError,
+    SwapUnauthorized,
+    SwapUnavailable,
+)
 
 
 router = APIRouter(prefix="/api")
@@ -148,6 +152,14 @@ def install_error_handlers(app) -> None:
     @app.exception_handler(SwapUnavailable)
     async def unavailable(_request, error: SwapUnavailable):
         return JSONResponse(status_code=503, content={"detail": str(error)})
+
+    @app.exception_handler(SwapUnauthorized)
+    async def rejected_credential(_request, error: SwapUnauthorized):
+        # 凭据被拒不是"上游出故障"，重试没有意义，必须让用户去改配置。
+        return JSONResponse(
+            status_code=503,
+            content={"detail": str(error), "upstream_status": error.status},
+        )
 
     @app.exception_handler(SwapResponseError)
     async def upstream_error(_request, error: SwapResponseError):

@@ -20,6 +20,7 @@ def test_settings_uses_expanded_default_paths_and_console_defaults() -> None:
     assert settings.config_path == Path("~/.config/llama-swap/config.yaml").expanduser()
     assert settings.model_roots == (Path("/mnt/d/AI/models"),)
     assert settings.llama_swap_url == "http://127.0.0.1:9292"
+    assert settings.llama_swap_api_key == ""
     assert settings.listen_host == "127.0.0.1"
     assert settings.listen_port == 9293
     assert settings.backup_dir == Path(
@@ -52,3 +53,13 @@ def test_settings_reads_prefixed_environment_variables_and_ignores_unknown_value
     settings = _settings_type()()
 
     assert settings.listen_port == 9393
+
+
+def test_settings_reads_the_llama_swap_api_key_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LLAMA_SWAP_CONSOLE_LLAMA_SWAP_API_KEY", "sk-test-only")
+
+    settings = _settings_type()()
+
+    assert settings.llama_swap_api_key == "sk-test-only"

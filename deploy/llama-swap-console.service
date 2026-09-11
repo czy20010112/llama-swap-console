@@ -10,6 +10,10 @@ Environment="LLAMA_SWAP_CONSOLE_CONFIG_PATH=%h/.config/llama-swap/config.yaml"
 Environment="LLAMA_SWAP_CONSOLE_MODEL_ROOTS=[\"/mnt/d/AI/models\",\"/home/czy098/models\"]"
 Environment="LLAMA_SWAP_CONSOLE_LLAMA_SWAP_URL=http://127.0.0.1:9292"
 Environment="LLAMA_SWAP_CONSOLE_BACKUP_DIR=%h/.local/state/llama-swap-console/backups"
+# llama-swap 启用 API key 时，凭据放在这个文件里（权限 600，不进版本库）。
+# 文件内容一行即可：LLAMA_SWAP_CONSOLE_LLAMA_SWAP_API_KEY=sk-...
+# 前缀的 "-" 表示文件不存在时不报错——未启用认证的部署无需创建它。
+EnvironmentFile=-%h/.config/llama-swap-console/env
 ExecStart=%h/.local/share/llama-swap-console/.venv/bin/python -m uvicorn llama_swap_console.app:app --host 127.0.0.1 --port 9293 --timeout-graceful-shutdown 10
 Restart=on-failure
 RestartSec=3

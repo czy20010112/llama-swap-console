@@ -42,6 +42,21 @@ fi
 mkdir -p "${INSTALL_DIR}" "${USER_UNIT_DIR}" \
   "${HOME}/.local/state/llama-swap-console/backups"
 
+# llama-swap 的访问凭据放这里，由 systemd 的 EnvironmentFile 读取。
+# 只创建空模板，绝不覆盖已有文件——重复执行安装不能抹掉别人的 key。
+ENV_DIR="${HOME}/.config/llama-swap-console"
+ENV_FILE="${ENV_DIR}/env"
+mkdir -p "${ENV_DIR}"
+chmod 700 "${ENV_DIR}"
+if [[ ! -e "${ENV_FILE}" ]]; then
+  cat > "${ENV_FILE}" <<'EOF'
+# llama-swap 启用 API key 认证时，取消注释并填入凭据；未启用则保持注释即可。
+# 本文件不属于版本库，权限 600。
+# LLAMA_SWAP_CONSOLE_LLAMA_SWAP_API_KEY=sk-...
+EOF
+  chmod 600 "${ENV_FILE}"
+fi
+
 if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
   python3 -m venv "${VENV_DIR}"
 fi
@@ -86,4 +101,6 @@ cat <<'EOF'
 安装完成。
 管理台：http://localhost:9293
 推理 API 仍由 llama-swap 提供：http://localhost:9292
+若 llama-swap 开启了 API key 认证，请编辑 ~/.config/llama-swap-console/env 填入凭据，
+再执行 systemctl --user restart llama-swap-console.service
 EOF

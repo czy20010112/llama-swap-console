@@ -2,7 +2,10 @@
 
 const locales = {
   "zh-CN": {
-    connecting: "正在连接", connected: "已连接", offline: "服务不可用", models: "模型",
+    connecting: "正在连接", connected: "已连接", offline: "服务不可用",
+    unauthorized: "凭据被拒",
+    unauthorizedHint: "llama-swap 拒绝了访问凭据，请检查环境变量 LLAMA_SWAP_CONSOLE_LLAMA_SWAP_API_KEY",
+    models: "模型",
     notRunning: "未运行", sampling: "采样中…",
     details: "详情", operations: "状态", library: "本地推理", running: "正在运行",
     allModels: "全部模型", discovered: "待登记模型", noneRunning: "暂无运行模型",
@@ -39,7 +42,10 @@ const locales = {
     decodeSpeed: "纯生成速度", aggregateSpeed: "总吞吐", requestSpeed: "单请求"
   },
   en: {
-    connecting: "Connecting", connected: "Connected", offline: "Service unavailable", models: "Models",
+    connecting: "Connecting", connected: "Connected", offline: "Service unavailable",
+    unauthorized: "Credential rejected",
+    unauthorizedHint: "llama-swap rejected the credential — check the LLAMA_SWAP_CONSOLE_LLAMA_SWAP_API_KEY environment variable",
+    models: "Models",
     notRunning: "Not running", sampling: "Sampling…",
     details: "Details", operations: "Status", library: "Local inference", running: "Running",
     allModels: "All models", discovered: "Unregistered", noneRunning: "No running models",
@@ -84,7 +90,7 @@ const state = {
   models: [], discovered: [], selectedId: null, currentModel: null, editingCandidate: null,
   query: "", processQuery: "", gpu: null, gpuAdapter: null, operationBusy: false, logSource: null,
   logRetry: 0, logTimer: null, logFlushTimer: null, logPending: [], logLines: [], operationPollTimer: null,
-  online: false
+  online: false, unauthorized: false
 };
 const OPERATION_STATUS_POLL_MS = 1000;
 const OPERATION_STATUS_MAX_POLLS = 30;
@@ -104,8 +110,8 @@ function applyLocale() {
   $$('[data-i18n-title]').forEach(element => { element.title = t(element.dataset.i18nTitle); });
   $("#language-toggle").textContent = state.locale === "zh-CN" ? "EN" : "中";
   $("#dialog-language-toggle").textContent = state.locale === "zh-CN" ? "EN" : "中";
-  // 连接状态文案由 setConnection 负责，这里会被 [data-i18n] 重置成"正在连接"，必须补回来
-  setConnection(state.online);
+  // 连接状态文案由 renderConnection 负责，这里会被 [data-i18n] 重置成"正在连接"，必须补回来
+  renderConnection();
 }
 
 async function api(path, options = {}) {
@@ -129,12 +135,27 @@ function showToast(message) {
   showToast.timer = setTimeout(() => element.classList.remove("show"), 2200);
 }
 
-function setConnection(online) {
-  state.online = Boolean(online);
+// 连接状态有三种而非两种：在线 / 服务不可用 / 凭据被拒（llama-swap 返回 401、403）。
+// 后两者对用户的处置完全不同——一个是"去把 llama-swap 拉起来"，一个是"key 配错了"，
+// 混成一句"服务不可用"会让人查错方向。
+function renderConnection() {
   const element = $("#connection-status");
-  element.classList.toggle("online", state.online);
-  element.lastElementChild.textContent = t(state.online ? "connected" : "offline");
+  const status = state.online ? "online" : state.unauthorized ? "unauthorized" : "offline";
+  const label = {online: "connected", unauthorized: "unauthorized", offline: "offline"}[status];
+  element.classList.toggle("online", status === "online");
+  element.classList.toggle("unauthorized", status === "unauthorized");
+  element.lastElementChild.textContent = t(label);
+  element.title = status === "unauthorized" ? t("unauthorizedHint") : "";
   updateCommandButtons();
+}
+
+function setConnection(online, { unauthorized = false } = {}) {
+  const wasUnauthorized = state.unauthorized;
+  state.online = Boolean(online);
+  state.unauthorized = Boolean(unauthorized) && !state.online;
+  renderConnection();
+  // 只在"刚变成未授权"的那一次提示，轮询不会反复弹
+  if (state.unauthorized && !wasUnauthorized) showToast(t("unauthorizedHint"));
 }
 
 function isActiveStatus(status) {
@@ -303,7 +324,7 @@ async function loadModels() {
   try {
     const data = await api("/api/models");
     state.models = data.models;
-    setConnection(data.llama_swap_available);
+    setConnection(data.llama_swap_available, {unauthorized: data.llama_swap_unauthorized});
     renderModels();
     if (state.selectedId && state.models.some(model => model.id === state.selectedId)) await selectModel(state.selectedId);
   } catch (error) {
@@ -829,7 +850,7 @@ async function runModelOperation(action) {
     await loadModels();
   } finally {
     state.operationBusy = false;
-    setConnection(state.online);
+    renderConnection();
   }
 }
 
@@ -852,7 +873,7 @@ function toggleLocale() {
   renderModels();
   renderGpu();
   renderDetail(state.currentModel);
-  setConnection(state.online);
+  renderConnection();
   if ($("#model-editor").open) openEditor(state.editingCandidate ? null : state.currentModel, state.editingCandidate, draft);
 }
 $("#language-toggle").addEventListener("click", toggleLocale);

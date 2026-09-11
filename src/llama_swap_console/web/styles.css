@@ -128,6 +128,13 @@ body{
   .topbar-status.online .status-dot{animation:soft-pulse 2.4s ease-in-out infinite}
 }
 
+/* 凭据被拒：与"服务不可用"区分开——黄点表示没连上，红点表示被挡在门外 */
+.topbar-status.unauthorized{color:var(--error)}
+.topbar-status.unauthorized .status-dot{background:var(--error)}
+@media(prefers-reduced-motion:no-preference){
+  .topbar-status.unauthorized .status-dot{animation:soft-pulse 1.6s ease-in-out infinite}
+}
+
 @media(prefers-reduced-motion:reduce){
   *,*::before,*::after{
     transition-duration:.01ms !important;

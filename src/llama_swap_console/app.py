@@ -18,6 +18,12 @@ from llama_swap_console.settings import Settings
 from llama_swap_console.swap_client import LlamaSwapClient
 
 
+def _auth_headers(api_key: str) -> dict[str, str]:
+    """HTTP headers that authenticate this console against llama-swap."""
+
+    return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+
 def create_app(
     settings: Settings | None = None, *, service: ModelService | None = None
 ) -> FastAPI:
@@ -31,7 +37,10 @@ def create_app(
             application.state.service = service
             yield
             return
-        async with httpx.AsyncClient(base_url=resolved_settings.llama_swap_url) as client:
+        async with httpx.AsyncClient(
+            base_url=resolved_settings.llama_swap_url,
+            headers=_auth_headers(resolved_settings.llama_swap_api_key),
+        ) as client:
             application.state.service = ModelService(
                 store=ConfigStore(
                     resolved_settings.config_path,

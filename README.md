@@ -17,7 +17,7 @@
 - 扫描 `/mnt/d/AI/models` 下的 GGUF 与 Hugging Face safetensors 模型，并登记完整的候选模型。
 - 自动过滤辅助模型，例如 `mmproj`、嵌入、重排序、草稿和 dflash/eagle GGUF；未完成下载的
   Hugging Face 模型会保留在列表中，但不能登记。
-- 在弹出式编辑窗口中分别编辑 llama.cpp 与 vLLM 的常用设置；启动器、端口模板和原始兼容参数
+- 在弹出式编辑窗口中分别编辑 llama.cpp、vLLM 与 SGLang 的常用设置；启动器、端口模板和原始兼容参数
   保持只读，避免丢失无法安全重写的命令参数。
 - 保存前校验 YAML、模型路径和配置版本；写入前创建备份，热重载失败时自动恢复本次改动。
 - 加载、卸载单个模型或全部模型，并把并发的同一模型操作合并，避免重复向上游发送请求。
@@ -125,6 +125,35 @@ bash scripts/uninstall-wsl.sh
 | 管理台地址 | `127.0.0.1:9293` |
 | 备份目录 | `~/.local/state/llama-swap-console/backups` |
 | 保留备份数 | 20 |
+| llama-swap 访问凭据 | 空（llama-swap 未启用认证） |
+
+#### llama-swap 开启了 API key 认证
+
+若 llama-swap 要求 `Authorization: Bearer`，管理台需要同一把凭据，否则顶部会显示
+**凭据被拒**（区别于 **服务不可用**），模型状态全部为 `unavailable`。
+
+凭据放在版本库之外的文件里，由 systemd 的 `EnvironmentFile` 读取：
+
+```bash
+mkdir -p ~/.config/llama-swap-console && chmod 700 ~/.config/llama-swap-console
+cat > ~/.config/llama-swap-console/env <<'EOF'
+LLAMA_SWAP_CONSOLE_LLAMA_SWAP_API_KEY=sk-...
+EOF
+chmod 600 ~/.config/llama-swap-console/env
+systemctl --user restart llama-swap-console
+```
+
+也可以不落文件，直接用环境变量覆盖：
+
+```bash
+LLAMA_SWAP_CONSOLE_LLAMA_SWAP_API_KEY=sk-... \
+  ~/.local/share/llama-swap-console/.venv/bin/python -m uvicorn \
+  llama_swap_console.app:app --host 127.0.0.1 --port 9293
+```
+
+未配置时不会发送 `Authorization` 头，因此未启用认证的部署无需任何改动。
+
+**请勿把凭据写进 `config.yaml`、unit 文件或提交到仓库。**
 
 模型扫描结果会缓存 5 分钟。登记候选模型时，路径必须位于允许的模型根目录中，模型必须完整，且
 该后端需要已有一个可解析的已配置模型作为受信任启动器模板。管理台不会猜测或下载启动器。
@@ -150,7 +179,8 @@ bash scripts/uninstall-wsl.sh
 | `pending` | 加载请求已被上游接受，但暂时还未能从运行状态确认。 |
 
 前端会禁用相关操作并每秒刷新模型状态，最多刷新 30 次。`202` 不是失败，也不需要反复点击“加载”。
-真正无法连上 llama-swap 时，管理台返回 `503`；llama-swap 返回非成功响应时，管理台返回 `502`。
+真正无法连上 llama-swap 时，管理台返回 `503`；llama-swap 返回非成功响应时，管理台返回 `502`；
+凭据被拒（`401`/`403`）同样返回 `503`，但提示会直接指向需要修改的配置项。
 
 ### 日常运维
 
@@ -199,6 +229,18 @@ curl http://127.0.0.1:9292/v1/models
 若该请求失败，请先恢复 llama-swap 服务。模型加载过程中的 `202 starting`、`loading` 或
 `pending` 属于正常过渡状态；等待状态刷新，不要并发反复点击。
 
+#### 顶部显示“凭据被拒”
+
+llama-swap 返回了 `401` 或 `403`。这通常不是故障，而是管理台没有带上凭据——按上文
+「llama-swap 开启了 API key 认证」写入 `~/.config/llama-swap-console/env` 后重启服务。
+也可以直接验证凭据本身：
+
+```bash
+curl -H "Authorization: Bearer <key>" http://127.0.0.1:9292/v1/models
+```
+
+返回 `200` 说明凭据有效、问题出在管理台没读到；仍返回 `401` 则说明凭据本身需要更换。
+
 #### 模型没有出现在“未登记模型”列表
 
 - 确认模型实际位于 `/mnt/d/AI/models` 或已通过服务环境变量配置的允许根目录内。
@@ -239,6 +281,8 @@ systemctl --user restart llama-swap-console
 - 网页不提供任意 YAML、Shell 命令或直接结束 Windows 进程的入口。
 - 进程区域只复制命令，由操作者在 CMD 中自行确认执行。
 - 所有配置写入先备份；热重载失败会尝试恢复写入前配置。
+- llama-swap 访问凭据存放在 `~/.config/llama-swap-console/env`（权限 600），不属于版本库；
+  管理台只把它作为 `Authorization` 头转发，不在页面回显，也不写入日志。
 
 这不是多用户网络服务。若要暴露到局域网或互联网，应另行设计认证、TLS、访问控制和进程管理策略。
 
@@ -284,9 +328,9 @@ as user data: install, update, and uninstall operations do not delete them.
 - Filter auxiliary models such as `mmproj`, embedding, reranker, draft, and
   dflash/eagle GGUF files. Incomplete Hugging Face downloads remain visible but
   cannot be registered.
-- Edit common llama.cpp and vLLM settings in a modal dialog. The launcher, port
-  template, and raw compatibility arguments stay read-only so unsupported command
-  arguments cannot be silently lost.
+- Edit common llama.cpp, vLLM, and SGLang settings in a modal dialog. The launcher,
+  port template, and raw compatibility arguments stay read-only so unsupported
+  command arguments cannot be silently lost.
 - Validate YAML, model paths, and configuration revisions before saving. Create a
   backup before each write and restore the attempted change if hot reload fails.
 - Load or unload one model or all models. Concurrent requests for the same model
@@ -393,6 +437,38 @@ Defaults can be overridden with environment variables prefixed by
 | Console listener | `127.0.0.1:9293` |
 | Backup directory | `~/.local/state/llama-swap-console/backups` |
 | Retained backups | 20 |
+| llama-swap credential | Empty (llama-swap authentication disabled) |
+
+#### llama-swap requires an API key
+
+When llama-swap demands `Authorization: Bearer`, the console must send the same
+credential. Otherwise the header reports **Credential rejected** — distinct from
+**Service unavailable** — and every model shows `unavailable`.
+
+Keep the credential in a file outside the repository and let systemd's
+`EnvironmentFile` read it:
+
+```bash
+mkdir -p ~/.config/llama-swap-console && chmod 700 ~/.config/llama-swap-console
+cat > ~/.config/llama-swap-console/env <<'EOF'
+LLAMA_SWAP_CONSOLE_LLAMA_SWAP_API_KEY=sk-...
+EOF
+chmod 600 ~/.config/llama-swap-console/env
+systemctl --user restart llama-swap-console
+```
+
+Or skip the file and override the environment directly:
+
+```bash
+LLAMA_SWAP_CONSOLE_LLAMA_SWAP_API_KEY=sk-... \
+  ~/.local/share/llama-swap-console/.venv/bin/python -m uvicorn \
+  llama_swap_console.app:app --host 127.0.0.1 --port 9293
+```
+
+With no key configured the console sends no `Authorization` header, so deployments
+without authentication need no change at all.
+
+**Never put the credential in `config.yaml`, in the unit file, or in version control.**
 
 Scan results are cached for five minutes. To register a candidate, its path must be
 inside an allowed model root, its download must be complete, and an existing,
@@ -428,7 +504,8 @@ When a load or unload needs time in llama-swap, the console can return HTTP
 The browser disables related controls and refreshes model status once per second,
 up to 30 times. A `202` is not a failure, so do not repeatedly click Load. A
 connection failure to llama-swap produces `503`; a non-success upstream response
-produces `502`.
+produces `502`; a rejected credential (`401`/`403`) also produces `503`, but its
+message points straight at the setting that has to change.
 
 ### Operations
 
@@ -478,6 +555,20 @@ If this fails, restore llama-swap first. `202 starting`, `loading`, and `pending
 are normal transition states during model startup; wait for status refresh instead
 of sending repeated concurrent requests.
 
+#### The header reports "Credential rejected"
+
+llama-swap answered `401` or `403`. This is usually not an outage — the console is
+not sending a credential. Follow "llama-swap requires an API key" above to write
+`~/.config/llama-swap-console/env`, then restart the service. You can also check the
+credential on its own:
+
+```bash
+curl -H "Authorization: Bearer <key>" http://127.0.0.1:9292/v1/models
+```
+
+A `200` means the credential is valid and the console simply did not read it; a
+`401` means the credential itself needs replacing.
+
 #### A model is missing from Unregistered models
 
 - Confirm that it is in `/mnt/d/AI/models`, or in a model root explicitly allowed
@@ -526,6 +617,9 @@ viewing both integrated and discrete GPUs.
 - The process panel only copies a command for the operator to review and run in CMD.
 - Every configuration write is backed up, and a failed hot reload attempts to
   restore the pre-write configuration.
+- The llama-swap credential lives in `~/.config/llama-swap-console/env` (mode 600)
+  and is never committed. The console only forwards it as an `Authorization`
+  header; it is not echoed in the UI and not written to logs.
 
 This is not a multi-user network service. Exposing it to a LAN or the internet
 requires a separate authentication, TLS, access-control, and process-management

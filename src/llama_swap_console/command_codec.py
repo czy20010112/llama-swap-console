@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from llama_swap_console.schemas import (
     LlamaCppSettings,
     ModelSettings,
+    SglangSettings,
     SpeculativeSettings,
     VllmSettings,
 )
@@ -74,6 +75,25 @@ VLLM_FLAGS = {
     "--safetensors-load-strategy": FlagSpec("safetensors_load_strategy"),
 }
 
+SGLANG_FLAGS = {
+    "--model-path": FlagSpec("model_path"),
+    "--context-length": FlagSpec("context_length", "int"),
+    "--mem-fraction-static": FlagSpec("mem_fraction_static", "float"),
+    "--kv-cache-dtype": FlagSpec("kv_cache_dtype"),
+    "--quantization": FlagSpec("quantization"),
+    "--tp-size": FlagSpec("tp_size", "int"),
+    "--tensor-parallel-size": FlagSpec("tp_size", "int"),
+    "--max-running-requests": FlagSpec("max_running_requests", "int"),
+    "--chunked-prefill-size": FlagSpec("chunked_prefill_size", "int"),
+    "--mamba-ssm-dtype": FlagSpec("mamba_ssm_dtype"),
+    "--speculative-algorithm": FlagSpec("speculative_algorithm"),
+    "--speculative-draft-model-path": FlagSpec("speculative_draft_model_path"),
+    "--speculative-num-steps": FlagSpec("speculative_num_steps", "int"),
+    "--speculative-eagle-topk": FlagSpec("speculative_eagle_topk", "int"),
+    "--speculative-num-draft-tokens": FlagSpec("speculative_num_draft_tokens", "int"),
+    "--enable-metrics": FlagSpec("enable_metrics", "bool"),
+}
+
 _TEMPLATE_TOKEN = re.compile(r"^\$\{[A-Z][A-Z0-9_]*\}$")
 
 
@@ -87,7 +107,11 @@ class CommandCodec:
             raise CommandDecodeError("Command is empty")
 
         backend = self._detect_backend(tokens)
-        backend_flags = VLLM_FLAGS if backend == "vllm" else LLAMA_FLAGS
+        backend_flags = {
+            "llama_cpp": LLAMA_FLAGS,
+            "vllm": VLLM_FLAGS,
+            "sglang": SGLANG_FLAGS,
+        }[backend]
         all_flags = {**COMMON_FLAGS, **backend_flags}
         positional_index = self._vllm_positional_model(tokens) if backend == "vllm" else None
         if positional_index is not None:
@@ -147,6 +171,14 @@ class CommandCodec:
                     vllm=VllmSettings(**specific),
                     **common,
                 )
+            if backend == "sglang":
+                return ModelSettings(
+                    backend=backend,
+                    launch_tokens=launch_tokens,
+                    unknown_tokens=tuple(unknown),
+                    sglang=SglangSettings(**specific),
+                    **common,
+                )
             return ModelSettings(
                 backend=backend,
                 launch_tokens=launch_tokens,
@@ -181,7 +213,7 @@ class CommandCodec:
                 ("--repeat-penalty", "repeat_penalty"),
             ):
                 self._append(tokens, flag, getattr(values, field))
-        else:
+        elif settings.backend == "vllm":
             assert settings.vllm is not None
             values = settings.vllm
             if settings.model_argument == "positional":
@@ -212,11 +244,44 @@ class CommandCodec:
                     "--speculative-config",
                     json.dumps(payload, separators=(",", ":"), ensure_ascii=True),
                 )
+        else:
+            assert settings.sglang is not None
+            values = settings.sglang
+            tokens.extend(["--model-path", settings.model_path, "--port", settings.port_token])
+            self._append(tokens, "--context-length", settings.context_length)
+            for flag, field in (
+                ("--mem-fraction-static", "mem_fraction_static"),
+                ("--kv-cache-dtype", "kv_cache_dtype"),
+                ("--quantization", "quantization"),
+                ("--tp-size", "tp_size"),
+                ("--max-running-requests", "max_running_requests"),
+                ("--chunked-prefill-size", "chunked_prefill_size"),
+                ("--mamba-ssm-dtype", "mamba_ssm_dtype"),
+                ("--speculative-algorithm", "speculative_algorithm"),
+                ("--speculative-draft-model-path", "speculative_draft_model_path"),
+                ("--speculative-num-steps", "speculative_num_steps"),
+                ("--speculative-eagle-topk", "speculative_eagle_topk"),
+                ("--speculative-num-draft-tokens", "speculative_num_draft_tokens"),
+                ("--enable-metrics", "enable_metrics"),
+            ):
+                self._append(tokens, flag, getattr(values, field))
         tokens.extend(settings.unknown_tokens)
         return " ".join(self._quote(token) for token in tokens)
 
     @staticmethod
-    def _detect_backend(tokens: list[str]) -> Literal["llama_cpp", "vllm"]:
+    def _detect_backend(tokens: list[str]) -> Literal["llama_cpp", "vllm", "sglang"]:
+        if any(
+            token.lower().rsplit("/", 1)[-1] == "sglang"
+            or token.lower().startswith("sglang.")
+            for token in tokens
+        ):
+            return "sglang"
+        if any(
+            CommandCodec._split_flag(token)[0]
+            in {"--model-path", "--context-length", "--mem-fraction-static", "--max-running-requests"}
+            for token in tokens
+        ):
+            return "sglang"
         if any("vllm" in token.lower() for token in tokens):
             return "vllm"
         if any(CommandCodec._split_flag(token)[0] in VLLM_FLAGS and CommandCodec._split_flag(token)[0] not in LLAMA_FLAGS for token in tokens):

@@ -30,6 +30,9 @@ test-results/
 !.env.example
 *.log
 
+# llama-swap 访问凭据（正常位于仓库外的 ~/.config/llama-swap-console/env，此处仅作兜底）
+**/llama-swap-console/env
+
 # Operating-system files
 .DS_Store
 Thumbs.db

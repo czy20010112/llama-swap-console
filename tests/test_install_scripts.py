@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -31,6 +32,26 @@ def test_systemd_service_bounds_sse_shutdown_before_systemd_deadline() -> None:
 
     assert "--timeout-graceful-shutdown 10" in unit
     assert "TimeoutStopSec=20" in unit
+
+
+def test_systemd_unit_loads_credentials_from_a_file_outside_the_repo() -> None:
+    unit = (ROOT / "deploy" / "llama-swap-console.service").read_text(
+        encoding="utf-8"
+    )
+
+    # 可选加载：没有该文件的部署（未开启认证）也必须能正常启动
+    assert "EnvironmentFile=-%h/.config/llama-swap-console/env" in unit
+    # 凭据本体绝不能出现在版本库里
+    assert not re.search(r"sk-[A-Za-z0-9]{16,}", unit)
+
+
+def test_installer_seeds_the_credential_file_without_overwriting_it() -> None:
+    script = (ROOT / "scripts" / "install-wsl.sh").read_text(encoding="utf-8")
+
+    assert '.config/llama-swap-console' in script
+    assert 'if [[ ! -e "${ENV_FILE}" ]]' in script
+    assert 'chmod 600 "${ENV_FILE}"' in script
+    assert not re.search(r"sk-[A-Za-z0-9]{16,}", script)
 
 
 def test_installer_is_idempotent_and_checks_health() -> None:

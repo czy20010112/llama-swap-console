@@ -18,6 +18,7 @@ from llama_swap_console.schemas import ModelRegisterRequest, ModelUpdateRequest
 from llama_swap_console.swap_client import (
     SwapReadTimeout,
     SwapResponseError,
+    SwapUnauthorized,
     SwapUnavailable,
 )
 
@@ -120,11 +121,23 @@ class ModelService:
             for item in models:
                 item["status"] = statuses.get(item["id"], "unknown")
             available = True
+            unauthorized = False
+        except SwapUnauthorized:
+            for item in models:
+                item["status"] = "unavailable"
+            available = False
+            unauthorized = True
         except (SwapUnavailable, SwapResponseError):
             for item in models:
                 item["status"] = "unavailable"
             available = False
-        return {"models": models, "revision": snapshot.revision, "llama_swap_available": available}
+            unauthorized = False
+        return {
+            "models": models,
+            "revision": snapshot.revision,
+            "llama_swap_available": available,
+            "llama_swap_unauthorized": unauthorized,
+        }
 
     async def get_model(self, model_id: str) -> dict[str, Any]:
         snapshot = self.store.read()

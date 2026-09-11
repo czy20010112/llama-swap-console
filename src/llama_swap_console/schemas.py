@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-Backend = Literal["llama_cpp", "vllm"]
+Backend = Literal["llama_cpp", "vllm", "sglang"]
 
 
 class SpeculativeSettings(BaseModel):
@@ -49,6 +49,22 @@ class VllmSettings(BaseModel):
     safetensors_load_strategy: str | None = None
 
 
+class SglangSettings(BaseModel):
+    mem_fraction_static: float | None = Field(default=None, ge=0.1, le=0.99)
+    kv_cache_dtype: str | None = None
+    quantization: str | None = None
+    tp_size: int | None = Field(default=None, ge=1, le=64)
+    max_running_requests: int | None = Field(default=None, ge=1, le=256)
+    chunked_prefill_size: int | None = Field(default=None, ge=1)
+    mamba_ssm_dtype: str | None = None
+    speculative_algorithm: str | None = None
+    speculative_draft_model_path: str | None = None
+    speculative_num_steps: int | None = Field(default=None, ge=1, le=16)
+    speculative_eagle_topk: int | None = Field(default=None, ge=1, le=64)
+    speculative_num_draft_tokens: int | None = Field(default=None, ge=0, le=64)
+    enable_metrics: bool = False
+
+
 class ModelSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -60,14 +76,23 @@ class ModelSettings(BaseModel):
     port_token: str = "${PORT}"
     llama_cpp: LlamaCppSettings | None = None
     vllm: VllmSettings | None = None
+    sglang: SglangSettings | None = None
     unknown_tokens: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def validate_backend_settings(self) -> "ModelSettings":
-        if self.backend == "llama_cpp" and (self.llama_cpp is None or self.vllm is not None):
+        if self.backend == "llama_cpp" and (
+            self.llama_cpp is None or self.vllm is not None or self.sglang is not None
+        ):
             raise ValueError("llama_cpp backend requires only llama_cpp settings")
-        if self.backend == "vllm" and (self.vllm is None or self.llama_cpp is not None):
+        if self.backend == "vllm" and (
+            self.vllm is None or self.llama_cpp is not None or self.sglang is not None
+        ):
             raise ValueError("vllm backend requires only vllm settings")
+        if self.backend == "sglang" and (
+            self.sglang is None or self.llama_cpp is not None or self.vllm is not None
+        ):
+            raise ValueError("sglang backend requires only sglang settings")
         if not self.launch_tokens:
             raise ValueError("launch_tokens cannot be empty")
         return self

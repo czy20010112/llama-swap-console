@@ -9,6 +9,7 @@ from llama_swap_console.swap_client import (
     LlamaSwapClient,
     SwapReadTimeout,
     SwapResponseError,
+    SwapUnauthorized,
     SwapUnavailable,
 )
 
@@ -245,6 +246,45 @@ async def test_decode_speed_uses_vllm_generation_counter_delta_when_activity_has
 
 
 @pytest.mark.asyncio
+async def test_decode_speed_uses_sglang_generation_counter_delta_when_activity_has_no_speed() -> None:
+    activity = '{"data":[{"model":"alpha","tokens":{"tokens_per_second":-1}}]}'
+    samples = iter(
+        [
+            'sglang:generation_tokens_total{engine_type="unified",model_name="alpha"} 100\n'
+            'sglang:num_running_reqs{engine_type="unified",model_name="alpha"} 1\n',
+            'sglang:generation_tokens_total{engine_type="unified",model_name="alpha"} 220\n'
+            'sglang:num_running_reqs{engine_type="unified",model_name="alpha"} 2\n',
+        ]
+    )
+    times = iter([10.0, 12.0])
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/metrics/activity":
+            return httpx.Response(200, text=activity, headers={"content-type": "application/json"})
+        if request.url.path == "/running":
+            return httpx.Response(200, json={"running": [{"model": "alpha", "state": "ready"}]})
+        return httpx.Response(200, text=next(samples))
+
+    async with httpx.AsyncClient(
+        base_url="http://127.0.0.1:9292", transport=httpx.MockTransport(respond)
+    ) as http_client:
+        measured = LlamaSwapClient(http_client, clock=lambda: next(times))
+
+        assert await measured.decode_speed("alpha") == {
+            "tokens_per_second": None,
+            "source": "sglang-generation-counter",
+            "scope": "aggregate",
+            "running_requests": 1,
+        }
+        assert await measured.decode_speed("alpha") == {
+            "tokens_per_second": 60.0,
+            "source": "sglang-generation-counter",
+            "scope": "aggregate",
+            "running_requests": 2,
+        }
+
+
+@pytest.mark.asyncio
 async def test_decode_speed_never_probes_upstream_for_stopped_model() -> None:
     upstream_hits: list[str] = []
 
@@ -266,3 +306,65 @@ async def test_decode_speed_never_probes_upstream_for_stopped_model() -> None:
     assert speed["source"] == "not-running"
     assert speed["tokens_per_second"] is None
     assert upstream_hits == []
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [401, 403])
+async def test_auth_rejection_is_its_own_error_type(
+    client: LlamaSwapClient, status: int
+) -> None:
+    respx.get("http://127.0.0.1:9292/v1/models").mock(
+        return_value=httpx.Response(status, json={"error": "invalid api key"})
+    )
+
+    with pytest.raises(SwapUnauthorized) as raised:
+        await client.models()
+
+    assert raised.value.status == status
+    # 提示必须指向可操作的修复项，而不是让用户去查"上游为什么挂了"
+    assert "LLAMA_SWAP_CONSOLE_LLAMA_SWAP_API_KEY" in str(raised.value)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_non_auth_http_error_stays_a_generic_response_error(
+    client: LlamaSwapClient,
+) -> None:
+    respx.get("http://127.0.0.1:9292/v1/models").mock(
+        return_value=httpx.Response(502, text="bad gateway")
+    )
+
+    with pytest.raises(SwapResponseError) as raised:
+        await client.models()
+
+    assert not isinstance(raised.value, SwapUnauthorized)
+    assert raised.value.status == 502
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_the_event_stream_also_flags_auth_rejection(
+    client: LlamaSwapClient,
+) -> None:
+    respx.get("http://127.0.0.1:9292/api/events").mock(
+        return_value=httpx.Response(403, text="forbidden")
+    )
+
+    with pytest.raises(SwapUnauthorized) as raised:
+        async for _ in client.events():
+            pass
+
+    assert raised.value.status == 403
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_auth_rejection_is_not_treated_as_availability(
+    client: LlamaSwapClient,
+) -> None:
+    respx.get("http://127.0.0.1:9292/v1/models").mock(
+        return_value=httpx.Response(401, json={"error": "invalid api key"})
+    )
+
+    assert await client.is_available() is False

@@ -27,6 +27,19 @@ class SwapResponseError(Exception):
         super().__init__(f"llama-swap returned HTTP {status}: {self.body}")
 
 
+class SwapUnauthorized(SwapResponseError):
+    """llama-swap rejected the credential (missing, wrong or expired API key)."""
+
+    def __init__(self, status: int, body: str) -> None:
+        super().__init__(status, body)
+        self.args = (
+            "llama-swap rejected the credential; check LLAMA_SWAP_CONSOLE_LLAMA_SWAP_API_KEY",
+        )
+
+
+_AUTH_REJECTED = {401, 403}
+
+
 class LlamaSwapClient:
     def __init__(self, client: httpx.AsyncClient, *, clock=time.monotonic) -> None:
         self._client = client
@@ -65,22 +78,45 @@ class LlamaSwapClient:
             return {"tokens_per_second": None, "source": "swap-unreachable", "scope": "aggregate", "running_requests": None}
         encoded = quote(model_id, safe="")
         metrics = await self._request("GET", f"/upstream/{encoded}/metrics")
-        total = self._metric(metrics, "vllm:generation_tokens_total", model_id)
-        running = self._metric(metrics, "vllm:num_requests_running", model_id)
+        total, running, source = self._decode_metrics(metrics, model_id)
         now = self._clock()
         previous = self._decode_samples.get(model_id)
         self._decode_samples[model_id] = (now, total)
         speed = None
         if previous is not None and now > previous[0] and total >= previous[1]:
             speed = (total - previous[1]) / (now - previous[0])
-        return {"tokens_per_second": speed, "source": "vllm-generation-counter", "scope": "aggregate", "running_requests": int(running)}
+        return {"tokens_per_second": speed, "source": source, "scope": "aggregate", "running_requests": int(running)}
+
+    @classmethod
+    def _decode_metrics(cls, metrics: str, model_id: str) -> tuple[float, float, str]:
+        for total_name, running_name, source in (
+            (
+                "vllm:generation_tokens_total",
+                "vllm:num_requests_running",
+                "vllm-generation-counter",
+            ),
+            (
+                "sglang:generation_tokens_total",
+                "sglang:num_running_reqs",
+                "sglang-generation-counter",
+            ),
+        ):
+            try:
+                return (
+                    cls._metric(metrics, total_name, model_id),
+                    cls._metric(metrics, running_name, model_id),
+                    source,
+                )
+            except SwapUnavailable:
+                continue
+        raise SwapUnavailable(f"No supported generation metrics are available for {model_id!r}")
 
     @staticmethod
     def _metric(metrics: str, name: str, model_id: str) -> float:
         pattern = re.compile(rf'^{re.escape(name)}\{{[^}}]*model_name="{re.escape(model_id)}"[^}}]*\}}\s+([-+0-9.eE]+)$', re.MULTILINE)
         match = pattern.search(metrics)
         if match is None:
-            raise SwapUnavailable(f"vLLM metric {name!r} is unavailable for {model_id!r}")
+            raise SwapUnavailable(f"Metric {name!r} is unavailable for {model_id!r}")
         return float(match.group(1))
 
     async def load(self, model_id: str) -> Any:
@@ -110,7 +146,11 @@ class LlamaSwapClient:
             ) as response:
                 if not response.is_success:
                     body = (await response.aread()).decode(errors="replace")
-                    raise SwapResponseError(response.status_code, body)
+                    raise (
+                        SwapUnauthorized(response.status_code, body)
+                        if response.status_code in _AUTH_REJECTED
+                        else SwapResponseError(response.status_code, body)
+                    )
                 lines: list[str] = []
                 async for line in response.aiter_lines():
                     if line == "":
@@ -138,6 +178,8 @@ class LlamaSwapClient:
         except httpx.RequestError as error:
             raise SwapUnavailable(str(error)) from error
         if not response.is_success:
+            if response.status_code in _AUTH_REJECTED:
+                raise SwapUnauthorized(response.status_code, response.text)
             raise SwapResponseError(response.status_code, response.text)
         if not response.content:
             return None
