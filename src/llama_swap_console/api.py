@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+from collections.abc import AsyncIterator
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Request
@@ -24,9 +26,29 @@ router = APIRouter(prefix="/api")
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 _WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
+logger = logging.getLogger(__name__)
+
 
 def service(request: Request) -> ModelService:
     return request.app.state.service
+
+
+async def _drain_safely(stream: AsyncIterator[str]) -> AsyncIterator[str]:
+    """End a live event stream quietly when llama-swap fails mid-connection.
+
+    By the time the generator is iterating, the 200 and the response headers are
+    already on the wire, so an escaping exception cannot reach an exception
+    handler — Starlette can only log
+    "Caught handled exception, but response already started." and emit a full
+    traceback for every reconnect, blaming the framework instead of the upstream.
+    Ending the stream hands control back to the frontend's backoff.
+    """
+
+    try:
+        async for chunk in stream:
+            yield chunk
+    except (SwapUnauthorized, SwapUnavailable, SwapResponseError) as error:
+        logger.warning("event stream closed early: %s", error)
 
 
 async def local_origin_middleware(request: Request, call_next):
@@ -116,16 +138,20 @@ async def gpu(request: Request):
 
 @router.get("/events")
 async def events(request: Request):
+    # Check the credential before the stream opens; see _drain_safely for why a
+    # rejection found later can no longer be reported as an error status.
+    await service(request).swap.assert_authorized()
     return StreamingResponse(
-        service(request).swap.events(), media_type="text/event-stream"
+        _drain_safely(service(request).swap.events()), media_type="text/event-stream"
     )
 
 
 @router.get("/models/{model_id}/logs")
 async def model_logs(model_id: str, request: Request):
     await service(request).get_model(model_id)
+    await service(request).swap.assert_authorized()
     return StreamingResponse(
-        service(request).swap.events(), media_type="text/event-stream"
+        _drain_safely(service(request).swap.events()), media_type="text/event-stream"
     )
 
 

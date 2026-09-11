@@ -360,6 +360,35 @@ async def test_the_event_stream_also_flags_auth_rejection(
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_assert_authorized_surfaces_a_rejection_before_any_stream_opens(
+    client: LlamaSwapClient,
+) -> None:
+    respx.get("http://127.0.0.1:9292/v1/models").mock(
+        return_value=httpx.Response(401, json={"error": "invalid api key"})
+    )
+
+    with pytest.raises(SwapUnauthorized) as raised:
+        await client.assert_authorized()
+
+    assert raised.value.status == 401
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_assert_authorized_is_silent_when_the_credential_is_accepted(
+    client: LlamaSwapClient,
+) -> None:
+    route = respx.get("http://127.0.0.1:9292/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "alpha"}]})
+    )
+
+    await client.assert_authorized()
+
+    assert route.called
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_auth_rejection_is_not_treated_as_availability(
     client: LlamaSwapClient,
 ) -> None:

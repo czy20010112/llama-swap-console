@@ -62,6 +62,19 @@ class LlamaSwapClient:
     async def models(self) -> Any:
         return await self._request("GET", "/v1/models")
 
+    async def assert_authorized(self) -> None:
+        """Probe the credential before opening a long-lived stream.
+
+        A streaming response writes its status line before the body is generated,
+        so a rejection discovered mid-stream can no longer be turned into a JSON
+        error: the browser receives a healthy 200 that dies immediately, reads it
+        as a dropped connection and reconnects on a short backoff forever. Asking
+        here keeps the failure on the normal exception-handler path, where it can
+        still answer 503 and name the environment variable to fix.
+        """
+
+        await self._request("GET", "/v1/models", timeout=httpx.Timeout(5.0))
+
     async def running(self) -> Any:
         return await self._request("GET", "/running")
 

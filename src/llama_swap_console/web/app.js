@@ -99,6 +99,8 @@ const SPEED_REFRESH_MS = 2_000;
 const MAX_LOG_LINES = 2_000;
 const MAX_LOG_CHARS = 120_000;
 const MAX_LOG_EVENT_CHARS = 12_000;
+// 凭据不通时开流必然被拒，退避重连只会白敲上游，压低到 15s 等状态刷新。
+const LOG_RETRY_WHEN_UNAUTHORIZED_MS = 15_000;
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const t = key => locales[state.locale][key] || key;
@@ -602,6 +604,12 @@ function connectLogs() {
   clearTimeout(state.logTimer);
   state.logSource?.close();
   const status = $("#log-status");
+  if (state.unauthorized) {
+    // 凭据被拒时开流只会拿到 503，连接状态的提示已经在顶栏上了，这里安静等。
+    status.textContent = t("disconnected");
+    state.logTimer = setTimeout(connectLogs, LOG_RETRY_WHEN_UNAUTHORIZED_MS);
+    return;
+  }
   status.textContent = t("connecting");
   const source = new EventSource("/api/events");
   state.logSource = source;

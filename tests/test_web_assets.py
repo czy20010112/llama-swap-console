@@ -166,3 +166,26 @@ def test_sse_endpoint_does_not_intentionally_disconnect_every_few_seconds() -> N
 
     assert "_bounded_event_stream" not in api
     assert "service(request).swap.events()" in api
+
+
+def test_event_stream_checks_the_credential_before_it_starts() -> None:
+    """Without the pre-flight, a rejected key arrives as a 200 that instantly dies."""
+
+    root = Path(__file__).parents[1] / "src" / "llama_swap_console"
+    api = (root / "api.py").read_text(encoding="utf-8")
+
+    assert api.count("await service(request).swap.assert_authorized()") == 2
+    assert "event stream closed early" in api
+
+
+def test_the_log_stream_backs_off_while_the_credential_is_rejected() -> None:
+    script = (
+        Path(__file__).parents[1]
+        / "src"
+        / "llama_swap_console"
+        / "web"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "const LOG_RETRY_WHEN_UNAUTHORIZED_MS = 15_000;" in script
+    assert "setTimeout(connectLogs, LOG_RETRY_WHEN_UNAUTHORIZED_MS)" in script

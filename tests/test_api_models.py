@@ -17,7 +17,7 @@ from llama_swap_console.model_scanner import ModelScanner
 from llama_swap_console.model_service import ModelService
 from llama_swap_console.schemas import ModelRegisterRequest, ModelUpdateRequest
 from llama_swap_console.settings import Settings
-from llama_swap_console.swap_client import LlamaSwapClient
+from llama_swap_console.swap_client import LlamaSwapClient, SwapUnauthorized
 
 
 CONFIG = """models:
@@ -52,6 +52,9 @@ class FakeSwap:
             ]
         }
 
+    async def assert_authorized(self):
+        return None
+
     async def running(self):
         return {"running": []}
 
@@ -84,6 +87,21 @@ class DelayedEventsSwap(FakeSwap):
         yield "event: log\ndata: first\n\n"
         await asyncio.sleep(0.02)
         yield "event: log\ndata: second\n\n"
+
+
+class UnauthorizedSwap(FakeSwap):
+    """llama-swap requires a key the console does not have."""
+
+    async def assert_authorized(self):
+        raise SwapUnauthorized(401, "invalid api key")
+
+
+class KeyRotatedMidStreamSwap(FakeSwap):
+    """The credential stops being accepted once the stream is already open."""
+
+    async def events(self):
+        yield "event: log\ndata: first\n\n"
+        raise SwapUnauthorized(403, "key rotated")
 
 
 class FakeGpu:
@@ -423,6 +441,35 @@ def test_event_stream_preserves_an_open_upstream_connection(console) -> None:
     assert response.status_code == 200
     assert "data: first" in response.text
     assert "data: second" in response.text
+
+
+def test_event_stream_reports_a_rejected_credential_as_an_http_error(console) -> None:
+    """A 200 that dies instantly reads as "dropped" and triggers endless retries.
+
+    The credential must therefore be checked before any SSE bytes go out, so the
+    rejection still arrives as a status the client can act on.
+    """
+
+    client, service, _swap, _model_root = console
+    service.swap = UnauthorizedSwap()
+
+    response = client.get("/api/events")
+
+    assert response.status_code == 503
+    assert response.json()["upstream_status"] == 401
+    assert "LLAMA_SWAP_CONSOLE_LLAMA_SWAP_API_KEY" in response.json()["detail"]
+
+
+def test_event_stream_ends_quietly_when_the_upstream_fails_mid_stream(console) -> None:
+    """Raising after the headers are sent only produces a framework traceback."""
+
+    client, service, _swap, _model_root = console
+    service.swap = KeyRotatedMidStreamSwap()
+
+    response = client.get("/api/events")
+
+    assert response.status_code == 200
+    assert "data: first" in response.text
 
 
 def test_model_speed_endpoint_reports_decode_throughput(console) -> None:
