@@ -3,7 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#F6F6F5" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0E0F11" media="(prefers-color-scheme: dark)">
   <title>llama-swap Console</title>
   <link rel="stylesheet" href="/assets/styles.css">
 </head>
@@ -91,7 +93,14 @@
       <section class="ops-section gpu-section">
         <div class="ops-heading"><h2 data-i18n="gpu">GPU</h2><span id="gpu-source">NVIDIA / WDDM</span></div>
         <div class="speed-summary"><span data-i18n="decodeSpeed">纯生成速度</span><strong id="decode-speed">—</strong><small id="decode-speed-scope"></small></div>
-        <select id="gpu-selector" class="gpu-selector" aria-label="选择图形适配器"></select>
+        <div class="dd" id="gpu-dd">
+          <button
+            class="dd-toggle gpu-selector" type="button" id="gpu-selector"
+            role="combobox" aria-haspopup="listbox" aria-expanded="false"
+            aria-label="选择图形适配器" aria-controls="gpu-dd-menu"
+          ><span class="dd-val"></span><span class="dd-caret" aria-hidden="true"></span></button>
+          <ul class="dd-menu" id="gpu-dd-menu" role="listbox" aria-label="选择图形适配器" hidden></ul>
+        </div>
         <div id="gpu-summary" class="gpu-summary"><p class="empty" data-i18n="loading">加载中</p></div>
       </section>
       <section class="ops-section process-section">

@@ -282,7 +282,9 @@ async def run_command(program: str, args: list[str]) -> str:
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=5)
+        # 5s 在 WSL 里跨界调 powershell.exe 经常不够（冷启动 + 杀软扫描），
+        # 导致 adapters/processes 频繁降级为空；放宽到 15s，采集本身有缓存不阻塞 API。
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=15)
     except TimeoutError:
         process.kill()
         await process.communicate()

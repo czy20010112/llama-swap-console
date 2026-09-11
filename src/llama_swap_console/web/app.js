@@ -3,6 +3,7 @@
 const locales = {
   "zh-CN": {
     connecting: "正在连接", connected: "已连接", offline: "服务不可用", models: "模型",
+    notRunning: "未运行", sampling: "采样中…",
     details: "详情", operations: "状态", library: "本地推理", running: "正在运行",
     allModels: "全部模型", discovered: "待登记模型", noneRunning: "暂无运行模型",
     searchModels: "搜索模型、路径或 ID", searchProcesses: "进程、服务或 PID",
@@ -30,11 +31,16 @@ const locales = {
     dtype: "计算精度", maxSequences: "最大并发序列", maxBatchedTokens: "最大批处理 Token",
     chunkedPrefill: "分块预填充", trustRemoteCode: "信任远程代码", reasoningParser: "推理解析器",
     toolParser: "工具调用解析器", autoToolChoice: "自动工具选择", loadStrategy: "权重加载策略",
-    mtpMethod: "推测方法", mtpModel: "推测模型", mtpTokens: "推测 Token 数", yes: "是", no: "否",
+    mtpMethod: "推测方法", mtpModel: "推测模型", mtpTokens: "推测 Token 数", tpSize: "张量并行数",
+    staticMemoryFraction: "静态显存比例", maxRunningRequests: "最大并发请求", chunkedPrefillSize: "分块预填充 Token",
+    mambaSsmDtype: "Mamba 状态精度", speculativeAlgorithm: "推测算法", speculativeDraftModel: "推测草稿模型",
+    speculativeSteps: "推测步数", speculativeTopK: "推测 Top-K", speculativeDraftTokens: "推测草稿 Token", enableMetrics: "启用指标",
+    yes: "是", no: "否",
     decodeSpeed: "纯生成速度", aggregateSpeed: "总吞吐", requestSpeed: "单请求"
   },
   en: {
     connecting: "Connecting", connected: "Connected", offline: "Service unavailable", models: "Models",
+    notRunning: "Not running", sampling: "Sampling…",
     details: "Details", operations: "Status", library: "Local inference", running: "Running",
     allModels: "All models", discovered: "Unregistered", noneRunning: "No running models",
     searchModels: "Search model, path, or ID", searchProcesses: "Process, service, or PID",
@@ -65,6 +71,10 @@ const locales = {
     chunkedPrefill: "Chunked prefill", trustRemoteCode: "Trust remote code", reasoningParser: "Reasoning parser",
     toolParser: "Tool-call parser", autoToolChoice: "Automatic tool choice", loadStrategy: "Weight load strategy",
     mtpMethod: "Speculative method", mtpModel: "Speculative model", mtpTokens: "Speculative tokens",
+    tpSize: "Tensor parallel size", staticMemoryFraction: "Static memory fraction", maxRunningRequests: "Maximum running requests",
+    chunkedPrefillSize: "Chunked prefill tokens", mambaSsmDtype: "Mamba state dtype", speculativeAlgorithm: "Speculative algorithm",
+    speculativeDraftModel: "Speculative draft model", speculativeSteps: "Speculative steps", speculativeTopK: "Speculative Top-K",
+    speculativeDraftTokens: "Speculative draft tokens", enableMetrics: "Enable metrics",
     yes: "Yes", no: "No", decodeSpeed: "Decode speed", aggregateSpeed: "aggregate", requestSpeed: "per request"
   }
 };
@@ -73,7 +83,8 @@ const state = {
   locale: localStorage.getItem("llamaSwapConsole.locale") || "zh-CN",
   models: [], discovered: [], selectedId: null, currentModel: null, editingCandidate: null,
   query: "", processQuery: "", gpu: null, gpuAdapter: null, operationBusy: false, logSource: null,
-  logRetry: 0, logTimer: null, logFlushTimer: null, logPending: [], logLines: [], operationPollTimer: null
+  logRetry: 0, logTimer: null, logFlushTimer: null, logPending: [], logLines: [], operationPollTimer: null,
+  online: false
 };
 const OPERATION_STATUS_POLL_MS = 1000;
 const OPERATION_STATUS_MAX_POLLS = 30;
@@ -93,6 +104,8 @@ function applyLocale() {
   $$('[data-i18n-title]').forEach(element => { element.title = t(element.dataset.i18nTitle); });
   $("#language-toggle").textContent = state.locale === "zh-CN" ? "EN" : "中";
   $("#dialog-language-toggle").textContent = state.locale === "zh-CN" ? "EN" : "中";
+  // 连接状态文案由 setConnection 负责，这里会被 [data-i18n] 重置成"正在连接"，必须补回来
+  setConnection(state.online);
 }
 
 async function api(path, options = {}) {
@@ -117,17 +130,21 @@ function showToast(message) {
 }
 
 function setConnection(online) {
+  state.online = Boolean(online);
   const element = $("#connection-status");
-  element.classList.toggle("online", online);
-  element.lastElementChild.textContent = t(online ? "connected" : "offline");
-  updateCommandButtons(online);
+  element.classList.toggle("online", state.online);
+  element.lastElementChild.textContent = t(state.online ? "connected" : "offline");
+  updateCommandButtons();
 }
 
 function isActiveStatus(status) {
   return ["running", "loaded", "ready", "starting", "loading", "pending"].includes(status);
 }
 
-function updateCommandButtons(online = $("#connection-status").classList.contains("online")) {
+// 真值来源统一为 state.online：过去这里默认参数从 DOM 的 class 里回读，
+// 一旦 applyLocale 之类重置过 DOM，按钮状态就会跟着错。
+function updateCommandButtons() {
+  const online = state.online;
   const status = state.currentModel?.status;
   const active = isActiveStatus(status);
   const transitioning = ["starting", "loading", "pending"].includes(status);
@@ -224,7 +241,12 @@ const settingLabels = {
   quantization: "quantization", max_num_seqs: "maxSequences", max_num_batched_tokens: "maxBatchedTokens",
   enable_chunked_prefill: "chunkedPrefill", trust_remote_code: "trustRemoteCode",
   reasoning_parser: "reasoningParser", tool_call_parser: "toolParser",
-  enable_auto_tool_choice: "autoToolChoice", safetensors_load_strategy: "loadStrategy", speculative: "mtp"
+  enable_auto_tool_choice: "autoToolChoice", safetensors_load_strategy: "loadStrategy", speculative: "mtp",
+  mem_fraction_static: "staticMemoryFraction", tp_size: "tpSize", max_running_requests: "maxRunningRequests",
+  chunked_prefill_size: "chunkedPrefillSize", mamba_ssm_dtype: "mambaSsmDtype",
+  speculative_algorithm: "speculativeAlgorithm", speculative_draft_model_path: "speculativeDraftModel",
+  speculative_num_steps: "speculativeSteps", speculative_eagle_topk: "speculativeTopK",
+  speculative_num_draft_tokens: "speculativeDraftTokens", enable_metrics: "enableMetrics"
 };
 
 function displayValue(value) {
@@ -251,10 +273,11 @@ function renderDetail(model) {
   $("#edit-model").disabled = !settings;
   for (const id of ["#basic-settings", "#memory-settings", "#acceleration-settings"]) $(id).replaceChildren();
   if (!settings) return;
-  addDefinition($("#basic-settings"), t("backend"), settings.backend === "vllm" ? "vLLM" : "llama.cpp");
+  const backendNames = {llama_cpp: "llama.cpp", vllm: "vLLM", sglang: "SGLang"};
+  addDefinition($("#basic-settings"), t("backend"), backendNames[settings.backend] || settings.backend);
   addDefinition($("#basic-settings"), t("modelPath"), settings.model_path);
   addDefinition($("#memory-settings"), t("context"), String(settings.context_length));
-  const specific = settings[settings.backend === "vllm" ? "vllm" : "llama_cpp"] || {};
+  const specific = settings[settings.backend] || {};
   Object.entries(specific).filter(([, value]) => value !== null && value !== false).forEach(([key, value]) =>
     addDefinition($("#acceleration-settings"), t(settingLabels[key] || key), displayValue(value)));
   const unknown = settings.unknown_tokens || [];
@@ -320,25 +343,87 @@ function adapterName(adapter) {
   return adapter.name || `${t("windowsAdapter")} ${adapter.adapter_id.split("_").slice(0, 2).join("_")}`;
 }
 
+/* ==== 自定义下拉 ====
+ * 原生 <select> 的弹出面板由操作系统绘制，CSS 完全够不着（深色模式下尤其突兀），
+ * 因此这里用「按钮 + listbox」复刻，保持与测评台一致的外观、动效与键盘行为。
+ */
+function closeDropdowns(except = null) {
+  $$(".dd").forEach(root => {
+    if (root === except) return;
+    root.classList.remove("open");
+    root.querySelector(".dd-menu").hidden = true;
+    root.querySelector(".dd-toggle").setAttribute("aria-expanded", "false");
+  });
+}
+
+function moveDropdownActive(root, delta) {
+  const items = [...root.querySelectorAll(".dd-menu li")];
+  if (!items.length) return;
+  items.forEach(item => item.classList.remove("is-active"));
+  const index = items.findIndex(item => item.classList.contains("is-active"));
+  const next = (index + delta + items.length) % items.length;
+  items[next].classList.add("is-active");
+  items[next].scrollIntoView({block: "nearest"});
+}
+
+function bindDropdown(root) {
+  const toggle = root.querySelector(".dd-toggle");
+  const menu = root.querySelector(".dd-menu");
+  const isOpen = () => root.classList.contains("open");
+  toggle.addEventListener("click", event => {
+    event.stopPropagation();
+    const wasOpen = isOpen();
+    closeDropdowns();
+    if (wasOpen) return;
+    root.classList.add("open");
+    menu.hidden = false;
+    toggle.setAttribute("aria-expanded", "true");
+    const picked = menu.querySelector('li[aria-selected="true"]');
+    if (picked) { picked.classList.add("is-active"); picked.scrollIntoView({block: "nearest"}); }
+  });
+  toggle.addEventListener("keydown", event => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!isOpen()) toggle.click();
+      else moveDropdownActive(root, event.key === "ArrowDown" ? 1 : -1);
+    } else if (event.key === "Enter" && isOpen()) {
+      const active = menu.querySelector("li.is-active") || menu.querySelector('li[aria-selected="true"]');
+      if (active) { event.preventDefault(); active.click(); }
+    } else if (event.key === "Escape" && isOpen()) {
+      closeDropdowns();
+      toggle.focus();
+    }
+  });
+}
+
+/** entries: [{value, label}]；current: 当前值；onPick: 选中回调 */
+function renderDropdown(root, entries, current, onPick) {
+  const menu = root.querySelector(".dd-menu");
+  root.querySelector(".dd-val").textContent = (entries.find(item => item.value === current) || entries[0])?.label ?? "—";
+  menu.replaceChildren();
+  entries.forEach(item => {
+    const option = document.createElement("li");
+    option.setAttribute("role", "option");
+    option.dataset.value = item.value;
+    option.textContent = item.label;
+    option.setAttribute("aria-selected", String(item.value === current));
+    option.addEventListener("click", () => { closeDropdowns(); onPick(item.value); });
+    menu.append(option);
+  });
+}
+
 function renderGpuSelector() {
-  const selector = $("#gpu-selector");
   const adapters = state.gpu?.adapters || [];
   const available = new Set(adapters.map(adapter => adapter.adapter_id));
   if (!state.gpuAdapter || (state.gpuAdapter !== "all" && !available.has(state.gpuAdapter))) {
     state.gpuAdapter = adapters.find(adapter => adapter.is_discrete)?.adapter_id || "all";
   }
-  selector.replaceChildren();
-  const all = document.createElement("option");
-  all.value = "all";
-  all.textContent = t("allAdapters");
-  selector.append(all);
-  adapters.forEach(adapter => {
-    const option = document.createElement("option");
-    option.value = adapter.adapter_id;
-    option.textContent = adapterName(adapter);
-    selector.append(option);
+  const entries = [{value: "all", label: t("allAdapters")},
+    ...adapters.map(adapter => ({value: adapter.adapter_id, label: adapterName(adapter)}))];
+  renderDropdown($("#gpu-dd"), entries, state.gpuAdapter, value => {
+    state.gpuAdapter = value;
+    renderGpu();
   });
-  selector.value = state.gpuAdapter;
 }
 
 function renderGpu() {
@@ -415,12 +500,12 @@ async function loadDecodeSpeed() {
   try {
     const sample = await api(`/api/models/${encodeURIComponent(model.id)}/speed`);
     if (sample.source === "not-running") {
-      $("#decode-speed").textContent = "未运行";
+      $("#decode-speed").textContent = t("notRunning");
       $("#decode-speed-scope").textContent = "";
       return;
     }
     $("#decode-speed").textContent = Number.isFinite(sample.tokens_per_second)
-      ? `${sample.tokens_per_second.toFixed(1)} tok/s` : "采样中…";
+      ? `${sample.tokens_per_second.toFixed(1)} tok/s` : t("sampling");
     const scope = sample.scope === "request" ? t("requestSpeed") : t("aggregateSpeed");
     const concurrency = sample.running_requests > 1 ? ` · ${sample.running_requests} requests` : "";
     $("#decode-speed-scope").textContent = `${scope}${concurrency}`;
@@ -588,6 +673,10 @@ function candidateDefaults(item) {
       tool_call_parser: "qwen3_coder", safetensors_load_strategy: "prefetch",
       speculative: null
     } : null,
+    sglang: item.backend === "sglang" ? {
+      mem_fraction_static: gpuUtilization, kv_cache_dtype: "fp8_e4m3", tp_size: 1,
+      max_running_requests: 1, chunked_prefill_size: Math.min(context, 8192), enable_metrics: true
+    } : null,
     unknown_tokens: peer?.unknown_tokens || []
   };
 }
@@ -599,7 +688,7 @@ function editorFields(settings, model, candidate, meta = null) {
     field(t("modelId"), "meta.id", id, {readonly: Boolean(model)}),
     field(t("displayName"), "meta.name", name),
     field(t("description"), "meta.description", meta?.description ?? model?.description ?? "", {full: true}),
-    field(t("backend"), null, settings.backend, {options: [["llama_cpp", "llama.cpp"], ["vllm", "vLLM"]], readonly: true}),
+    field(t("backend"), null, settings.backend, {options: [["llama_cpp", "llama.cpp"], ["vllm", "vLLM"], ["sglang", "SGLang"]], readonly: true}),
     field(t("modelPath"), "model_path", settings.model_path, {full: true}),
     field(t("launcher"), null, settings.launch_tokens.join(" "), {full: true, readonly: true})
   ];
@@ -619,7 +708,7 @@ function editorFields(settings, model, candidate, meta = null) {
     field(t("topK"), "llama_cpp.top_k", settings.llama_cpp?.top_k, {type: "number"}),
     field(t("minP"), "llama_cpp.min_p", settings.llama_cpp?.min_p, {type: "number", step: "0.01"}),
     field(t("repeatPenalty"), "llama_cpp.repeat_penalty", settings.llama_cpp?.repeat_penalty, {type: "number", step: "0.01"})
-  ] : [
+  ] : settings.backend === "vllm" ? [
     field(t("gpuUtilization"), "vllm.gpu_memory_utilization", settings.vllm?.gpu_memory_utilization, {type: "number", step: "0.01"}),
     field(t("kvCacheDtype"), "vllm.kv_cache_dtype", settings.vllm?.kv_cache_dtype),
     field(t("dtype"), "vllm.dtype", settings.vllm?.dtype),
@@ -635,6 +724,20 @@ function editorFields(settings, model, candidate, meta = null) {
     field(t("mtpMethod"), "vllm.speculative.method", settings.vllm?.speculative?.method),
     field(t("mtpModel"), "vllm.speculative.model", settings.vllm?.speculative?.model, {full: true}),
     field(t("mtpTokens"), "vllm.speculative.num_speculative_tokens", settings.vllm?.speculative?.num_speculative_tokens, {type: "number"})
+  ] : [
+    field(t("staticMemoryFraction"), "sglang.mem_fraction_static", settings.sglang?.mem_fraction_static, {type: "number", step: "0.01"}),
+    field(t("kvCacheDtype"), "sglang.kv_cache_dtype", settings.sglang?.kv_cache_dtype),
+    field(t("quantization"), "sglang.quantization", settings.sglang?.quantization),
+    field(t("tpSize"), "sglang.tp_size", settings.sglang?.tp_size, {type: "number"}),
+    field(t("maxRunningRequests"), "sglang.max_running_requests", settings.sglang?.max_running_requests, {type: "number"}),
+    field(t("chunkedPrefillSize"), "sglang.chunked_prefill_size", settings.sglang?.chunked_prefill_size, {type: "number"}),
+    field(t("mambaSsmDtype"), "sglang.mamba_ssm_dtype", settings.sglang?.mamba_ssm_dtype),
+    field(t("speculativeAlgorithm"), "sglang.speculative_algorithm", settings.sglang?.speculative_algorithm),
+    field(t("speculativeDraftModel"), "sglang.speculative_draft_model_path", settings.sglang?.speculative_draft_model_path, {full: true}),
+    field(t("speculativeSteps"), "sglang.speculative_num_steps", settings.sglang?.speculative_num_steps, {type: "number"}),
+    field(t("speculativeTopK"), "sglang.speculative_eagle_topk", settings.sglang?.speculative_eagle_topk, {type: "number"}),
+    field(t("speculativeDraftTokens"), "sglang.speculative_num_draft_tokens", settings.sglang?.speculative_num_draft_tokens, {type: "number"}),
+    field(t("enableMetrics"), "sglang.enable_metrics", settings.sglang?.enable_metrics, {type: "checkbox"})
   ];
   const compat = [field(t("compatibilityArgs"), "unknown_tokens", (settings.unknown_tokens || []).join(" "), {full: true})];
   return [group(t("basicSettings"), identity), group(t("memoryContext"), memory), group(t("acceleration"), specific), group(t("compatibilityArgs"), compat)];
@@ -726,7 +829,7 @@ async function runModelOperation(action) {
     await loadModels();
   } finally {
     state.operationBusy = false;
-    setConnection($("#connection-status").classList.contains("online"));
+    setConnection(state.online);
   }
 }
 
@@ -749,7 +852,7 @@ function toggleLocale() {
   renderModels();
   renderGpu();
   renderDetail(state.currentModel);
-  setConnection($("#connection-status").classList.contains("online"));
+  setConnection(state.online);
   if ($("#model-editor").open) openEditor(state.editingCandidate ? null : state.currentModel, state.editingCandidate, draft);
 }
 $("#language-toggle").addEventListener("click", toggleLocale);
@@ -757,7 +860,9 @@ $("#dialog-language-toggle").addEventListener("click", toggleLocale);
 $("#refresh-all").addEventListener("click", () => Promise.all([loadModels(), loadDiscovered(), loadGpu()]));
 $("#model-search").addEventListener("input", event => { state.query = event.target.value; renderModels(); });
 $("#process-search").addEventListener("input", event => { state.processQuery = event.target.value; renderGpu(); });
-$("#gpu-selector").addEventListener("change", event => { state.gpuAdapter = event.target.value; renderGpu(); });
+bindDropdown($("#gpu-dd"));
+document.addEventListener("click", () => closeDropdowns());
+document.addEventListener("keydown", event => { if (event.key === "Escape") closeDropdowns(); });
 $$('[data-mobile-panel]').forEach(button => button.addEventListener("click", () => showMobilePanel(button.dataset.mobilePanel)));
 $("#scan-models").addEventListener("click", async () => {
   try {
